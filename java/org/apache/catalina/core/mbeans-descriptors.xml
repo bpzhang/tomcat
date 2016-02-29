@@ -151,7 +151,7 @@
 
     <attribute name="instanceManager"
                description="Object that creates and destroys servlets, filters, and listeners. Include dependency injection and postConstruct/preDestory handling"
-               type="org.apache.catalina.instanceManagement.InstanceManager" />
+               type="org.apache.tomcat.InstanceManager" />
 
     <attribute name="javaVMs"
                description="The Java virtual machines on which this module is running"
@@ -270,7 +270,7 @@
                type="java.lang.String"/>
 
     <attribute name="servlets"
-               description="JSR77 list of servlets"
+               description="Deprecated. JSR77 list of servlets"
                type="[Ljava.lang.String;"
                writeable="false"/>
 
@@ -298,12 +298,6 @@
     <attribute name="startupTime"
                description="Time (in milliseconds) it took to start this context"
                type="long"/>
-
-    <attribute name="stateManageable"
-               description="State management support for this managed object"
-               is="true"
-               type="boolean"
-               writeable="false" />
 
     <attribute name="stateName"
                description="The name of the LifecycleState that this component is currently in"
@@ -1329,6 +1323,16 @@
                type="java.lang.String"
                writeable="false"/>
 
+    <attribute name="serverBuilt"
+               description="Tomcat server built timestamp"
+               type="java.lang.String"
+               writeable="false"/>
+
+    <attribute name="serverNumber"
+               description="Tomcat server's version number"
+               type="java.lang.String"
+               writeable="false"/>
+
     <attribute name="serviceNames"
                description="Object names of all services we know about"
                type="[Ljavax.management.ObjectName;"
@@ -1613,12 +1617,6 @@
                type="boolean"
                is="true"
                writeable="false" />
-
-    <attribute name="stateManageable"
-               description="State management support for this managed object"
-               is="true"
-               type="boolean"
-               writeable="false"/>
 
     <attribute name="stateName"
                description="The name of the LifecycleState that this component is currently in"

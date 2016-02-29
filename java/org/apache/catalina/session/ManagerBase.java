@@ -17,7 +17,6 @@
 package org.apache.catalina.session;
 
 
-import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.beans.PropertyChangeSupport;
 import java.io.IOException;
@@ -33,12 +32,15 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import org.apache.catalina.Container;
 import org.apache.catalina.Context;
 import org.apache.catalina.Engine;
+import org.apache.catalina.Globals;
 import org.apache.catalina.Lifecycle;
 import org.apache.catalina.LifecycleException;
+import org.apache.catalina.LifecycleState;
 import org.apache.catalina.Manager;
 import org.apache.catalina.Session;
 import org.apache.catalina.SessionIdGenerator;
@@ -57,8 +59,7 @@ import org.apache.tomcat.util.res.StringManager;
  *
  * @author Craig R. McClanahan
  */
-public abstract class ManagerBase extends LifecycleMBeanBase
-        implements Manager, PropertyChangeListener {
+public abstract class ManagerBase extends LifecycleMBeanBase implements Manager {
 
     private final Log log = LogFactory.getLog(ManagerBase.class); // must not be static
 
@@ -71,24 +72,10 @@ public abstract class ManagerBase extends LifecycleMBeanBase
 
 
     /**
-     * The distributable flag for Sessions created by this Manager.  If this
-     * flag is set to <code>true</code>, any user attributes added to a
-     * session controlled by this Manager must be Serializable.
-     */
-    protected boolean distributable;
-
-
-    /**
      * The descriptive name of this Manager implementation (for logging).
      */
     private static final String name = "ManagerBase";
 
-
-    /**
-     * The default maximum inactive interval for Sessions created by
-     * this Manager.
-     */
-    protected int maxInactiveInterval = 30 * 60;
 
     /**
      * The Java class name of the secure random number generator class to be
@@ -202,9 +189,36 @@ public abstract class ManagerBase extends LifecycleMBeanBase
 
     private Pattern sessionAttributeNamePattern;
 
+    private Pattern sessionAttributeValueClassNamePattern;
 
-    // ------------------------------------------------------------- Properties
+    private boolean warnOnSessionAttributeFilterFailure;
 
+
+    // ------------------------------------------------------------ Constructors
+
+    public ManagerBase() {
+        if (Globals.IS_SECURITY_ENABLED) {
+            // Minimum set required for default distribution/persistence to work
+            // plus String
+            setSessionAttributeValueClassNameFilter(
+                    "java\\.lang\\.(?:Boolean|Integer|Long|Number|String)");
+            setWarnOnSessionAttributeFilterFailure(true);
+        }
+    }
+
+
+    // -------------------------------------------------------------- Properties
+
+    /**
+     * Obtain the regular expression used to filter session attribute based on
+     * attribute name. The regular expression is anchored so it must match the
+     * entire name
+     *
+     * @return The regular expression currently used to filter attribute names.
+     *         {@code null} means no filter is applied. If an empty string is
+     *         specified then no names will match the filter and all attributes
+     *         will be blocked.
+     */
     public String getSessionAttributeNameFilter() {
         if (sessionAttributeNamePattern == null) {
             return null;
@@ -213,16 +227,118 @@ public abstract class ManagerBase extends LifecycleMBeanBase
     }
 
 
-    public void setSessionAttributeNameFilter(String sessionAttributeNameFilter) {
+    /**
+     * Set the regular expression to use to filter session attributes based on
+     * attribute name. The regular expression is anchored so it must match the
+     * entire name.
+     *
+     * @param sessionAttributeNameFilter The regular expression to use to filter
+     *        session attributes based on attribute name. Use {@code null} if no
+     *        filtering is required. If an empty string is specified then no
+     *        names will match the filter and all attributes will be blocked.
+     *
+     * @throws PatternSyntaxException If the expression is not valid
+     */
+    public void setSessionAttributeNameFilter(String sessionAttributeNameFilter)
+            throws PatternSyntaxException {
         if (sessionAttributeNameFilter == null || sessionAttributeNameFilter.length() == 0) {
             sessionAttributeNamePattern = null;
+        } else {
+            sessionAttributeNamePattern = Pattern.compile(sessionAttributeNameFilter);
         }
-        sessionAttributeNamePattern = Pattern.compile(sessionAttributeNameFilter);
     }
 
 
+    /**
+     * Provides {@link #getSessionAttributeNameFilter()} as a pre-compiled
+     * regular expression pattern.
+     *
+     * @return The pre-compiled pattern used to filter session attributes based
+     *         on attribute name. {@code null} means no filter is applied.
+     */
     protected Pattern getSessionAttributeNamePattern() {
         return sessionAttributeNamePattern;
+    }
+
+
+    /**
+     * Obtain the regular expression used to filter session attribute based on
+     * the implementation class of the value. The regular expression is anchored
+     * and must match the fully qualified class name.
+     *
+     * @return The regular expression currently used to filter class names.
+     *         {@code null} means no filter is applied. If an empty string is
+     *         specified then no names will match the filter and all attributes
+     *         will be blocked.
+     */
+    public String getSessionAttributeValueClassNameFilter() {
+        if (sessionAttributeValueClassNamePattern == null) {
+            return null;
+        }
+        return sessionAttributeValueClassNamePattern.toString();
+    }
+
+
+    /**
+     * Provides {@link #getSessionAttributeValueClassNameFilter()} as a
+     * pre-compiled regular expression pattern.
+     *
+     * @return The pre-compiled pattern used to filter session attributes based
+     *         on the implementation class name of the value. {@code null} means
+     *         no filter is applied.
+     */
+    protected Pattern getSessionAttributeValueClassNamePattern() {
+        return sessionAttributeValueClassNamePattern;
+    }
+
+
+    /**
+     * Set the regular expression to use to filter classes used for session
+     * attributes. The regular expression is anchored and must match the fully
+     * qualified class name.
+     *
+     * @param sessionAttributeValueClassNameFilter The regular expression to use
+     *            to filter session attributes based on class name. Use {@code
+     *            null} if no filtering is required. If an empty string is
+     *           specified then no names will match the filter and all
+     *           attributes will be blocked.
+     *
+     * @throws PatternSyntaxException If the expression is not valid
+     */
+    public void setSessionAttributeValueClassNameFilter(String sessionAttributeValueClassNameFilter)
+            throws PatternSyntaxException {
+        if (sessionAttributeValueClassNameFilter == null ||
+                sessionAttributeValueClassNameFilter.length() == 0) {
+            sessionAttributeValueClassNamePattern = null;
+        } else {
+            sessionAttributeValueClassNamePattern =
+                    Pattern.compile(sessionAttributeValueClassNameFilter);
+        }
+    }
+
+
+    /**
+     * Should a warn level log message be generated if a session attribute is
+     * not persisted / replicated / restored.
+     *
+     * @return {@code true} if a warn level log message should be generated
+     */
+    public boolean getWarnOnSessionAttributeFilterFailure() {
+        return warnOnSessionAttributeFilterFailure;
+    }
+
+
+    /**
+     * Configure whether or not a warn level log message should be generated if
+     * a session attribute is not persisted / replicated / restored.
+     *
+     * @param warnOnSessionAttributeFilterFailure {@code true} if the
+     *            warn level message should be generated
+     *
+     */
+    public void setWarnOnSessionAttributeFilterFailure(
+            boolean warnOnSessionAttributeFilterFailure) {
+        this.warnOnSessionAttributeFilterFailure = warnOnSessionAttributeFilterFailure;
     }
 
 
@@ -234,20 +350,16 @@ public abstract class ManagerBase extends LifecycleMBeanBase
 
     @Override
     public void setContext(Context context) {
-        // De-register from the old Context (if any)
-        if (this.context != null) {
-            this.context.removePropertyChangeListener(this);
+        if (this.context == context) {
+            // NO-OP
+            return;
         }
-
+        if (!getState().equals(LifecycleState.NEW)) {
+            throw new IllegalStateException(sm.getString("managerBase.setContextNotNew"));
+        }
         Context oldContext = this.context;
         this.context = context;
         support.firePropertyChange("context", oldContext, this.context);
-
-        // Register with the new Context (if any)
-        if (this.context != null) {
-            setMaxInactiveInterval(this.context.getSessionTimeout() * 60);
-            this.context.addPropertyChangeListener(this);
-        }
     }
 
 
@@ -256,46 +368,6 @@ public abstract class ManagerBase extends LifecycleMBeanBase
      */
     public String getClassName() {
         return this.getClass().getName();
-    }
-
-
-    @Override
-    public boolean getDistributable() {
-        return this.distributable;
-    }
-
-
-    /**
-     * {@inheritDoc}
-     * <p>
-     * Session attributes do not need to implement {@link java.io.Serializable}
-     * if they are excluded from distribution by
-     * {@link #willAttributeDistribute(String, Object)}.
-     */
-    @Override
-    public void setDistributable(boolean distributable) {
-
-        boolean oldDistributable = this.distributable;
-        this.distributable = distributable;
-        support.firePropertyChange("distributable",
-                                   Boolean.valueOf(oldDistributable),
-                                   Boolean.valueOf(this.distributable));
-    }
-
-
-    @Override
-    public int getMaxInactiveInterval() {
-        return this.maxInactiveInterval;
-    }
-
-
-    @Override
-    public void setMaxInactiveInterval(int interval) {
-        int oldMaxInactiveInterval = this.maxInactiveInterval;
-        this.maxInactiveInterval = interval;
-        support.firePropertyChange("maxInactiveInterval",
-                                   Integer.valueOf(oldMaxInactiveInterval),
-                                   Integer.valueOf(this.maxInactiveInterval));
     }
 
 
@@ -488,13 +560,16 @@ public abstract class ManagerBase extends LifecycleMBeanBase
 
     }
 
+
     @Override
     protected void initInternal() throws LifecycleException {
-
         super.initInternal();
 
-        setDistributable(getContext().getDistributable());
+        if (context == null) {
+            throw new LifecycleException(sm.getString("managerBase.contextNull"));
+        }
     }
+
 
     @Override
     protected void startInternal() throws LifecycleException {
@@ -534,6 +609,7 @@ public abstract class ManagerBase extends LifecycleMBeanBase
                 log.debug("Force random number initialization completed");
         }
     }
+
 
     @Override
     protected void stopInternal() throws LifecycleException {
@@ -581,7 +657,7 @@ public abstract class ManagerBase extends LifecycleMBeanBase
         session.setNew(true);
         session.setValid(true);
         session.setCreationTime(System.currentTimeMillis());
-        session.setMaxInactiveInterval(this.maxInactiveInterval);
+        session.setMaxInactiveInterval(getContext().getSessionTimeout() * 60);
         String id = sessionId;
         if (id == null) {
             id = generateSessionId();
@@ -688,10 +764,39 @@ public abstract class ManagerBase extends LifecycleMBeanBase
     @Override
     public boolean willAttributeDistribute(String name, Object value) {
         Pattern sessionAttributeNamePattern = getSessionAttributeNamePattern();
-        if (sessionAttributeNamePattern == null) {
-            return true;
+        if (sessionAttributeNamePattern != null) {
+            if (!sessionAttributeNamePattern.matcher(name).matches()) {
+                if (getWarnOnSessionAttributeFilterFailure() || log.isDebugEnabled()) {
+                    String msg = sm.getString("managerBase.sessionAttributeNameFilter",
+                            name, sessionAttributeNamePattern);
+                    if (getWarnOnSessionAttributeFilterFailure()) {
+                        log.warn(msg);
+                    } else {
+                        log.debug(msg);
+                    }
+                }
+                return false;
+            }
         }
-        return sessionAttributeNamePattern.matcher(name).matches();
+
+        Pattern sessionAttributeValueClassNamePattern = getSessionAttributeValueClassNamePattern();
+        if (value != null && sessionAttributeValueClassNamePattern != null) {
+            if (!sessionAttributeValueClassNamePattern.matcher(
+                    value.getClass().getName()).matches()) {
+                if (getWarnOnSessionAttributeFilterFailure() || log.isDebugEnabled()) {
+                    String msg = sm.getString("managerBase.sessionAttributeValueClassNameFilter",
+                            name, value.getClass().getName(), sessionAttributeNamePattern);
+                    if (getWarnOnSessionAttributeFilterFailure()) {
+                        log.warn(msg);
+                    } else {
+                        log.debug(msg);
+                    }
+                }
+                return false;
+            }
+        }
+
+        return true;
     }
 
 
@@ -911,37 +1016,13 @@ public abstract class ManagerBase extends LifecycleMBeanBase
      */
     @Override
     public int getSessionCreateRate() {
-        long now = System.currentTimeMillis();
         // Copy current stats
         List<SessionTiming> copy = new ArrayList<>();
         synchronized (sessionCreationTiming) {
             copy.addAll(sessionCreationTiming);
         }
 
-        // Init
-        long oldest = now;
-        int counter = 0;
-        int result = 0;
-        Iterator<SessionTiming> iter = copy.iterator();
-
-        // Calculate rate
-        while (iter.hasNext()) {
-            SessionTiming timing = iter.next();
-            if (timing != null) {
-                counter++;
-                if (timing.getTimestamp() < oldest) {
-                    oldest = timing.getTimestamp();
-                }
-            }
-        }
-        if (counter > 0) {
-            if (oldest < now) {
-                result = (1000*60*counter)/(int) (now - oldest);
-            } else {
-                result = Integer.MAX_VALUE;
-            }
-        }
-        return result;
+        return calculateRate(copy);
     }
 
 
@@ -955,18 +1036,23 @@ public abstract class ManagerBase extends LifecycleMBeanBase
      */
     @Override
     public int getSessionExpireRate() {
-        long now = System.currentTimeMillis();
         // Copy current stats
         List<SessionTiming> copy = new ArrayList<>();
         synchronized (sessionExpirationTiming) {
             copy.addAll(sessionExpirationTiming);
         }
 
+        return calculateRate(copy);
+    }
+
+
+    private static int calculateRate(List<SessionTiming> sessionTiming) {
         // Init
+        long now = System.currentTimeMillis();
         long oldest = now;
         int counter = 0;
         int result = 0;
-        Iterator<SessionTiming> iter = copy.iterator();
+        Iterator<SessionTiming> iter = sessionTiming.iterator();
 
         // Calculate rate
         while (iter.hasNext()) {
@@ -1161,28 +1247,6 @@ public abstract class ManagerBase extends LifecycleMBeanBase
     @Override
     public String getDomainInternal() {
         return context.getDomain();
-    }
-
-
-    // ----------------------------------------- PropertyChangeListener Methods
-
-    @Override
-    public void propertyChange(PropertyChangeEvent event) {
-
-        // Validate the source of this event
-        if (!(event.getSource() instanceof Context))
-            return;
-
-        // Process a relevant property change
-        if (event.getPropertyName().equals("sessionTimeout")) {
-            try {
-                setMaxInactiveInterval(
-                        ((Integer) event.getNewValue()).intValue() * 60);
-            } catch (NumberFormatException e) {
-                log.error(sm.getString("managerBase.sessionTimeout",
-                        event.getNewValue()));
-            }
-        }
     }
 
 

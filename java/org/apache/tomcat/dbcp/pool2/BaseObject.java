@@ -14,9 +14,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.catalina.webresources;
+package org.apache.tomcat.dbcp.pool2;
 
-public final class Constants {
+/**
+ * A base class for common functionality.
+ *
+ * @since 2.4.3
+ */
+public abstract class BaseObject {
 
-    public static final String Package = "org.apache.catalina.webresources";
+    @Override
+    public String toString() {
+        StringBuilder builder = new StringBuilder();
+        builder.append(getClass().getSimpleName());
+        builder.append(" [");
+        toStringAppendFields(builder);
+        builder.append("]");
+        return builder.toString();
+    }
+
+    protected void toStringAppendFields(@SuppressWarnings("unused") StringBuilder builder) {
+        // do nothing by default, needed for b/w compatibility.
+    }
+
 }

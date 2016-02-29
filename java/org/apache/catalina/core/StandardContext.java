@@ -16,11 +16,9 @@
  */
 package org.apache.catalina.core;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.AccessController;
@@ -82,7 +80,6 @@ import javax.servlet.http.HttpSessionIdListener;
 import javax.servlet.http.HttpSessionListener;
 
 import org.apache.catalina.Authenticator;
-import org.apache.catalina.Cluster;
 import org.apache.catalina.Container;
 import org.apache.catalina.ContainerListener;
 import org.apache.catalina.Context;
@@ -1700,16 +1697,6 @@ public class StandardContext extends ContainerBase
         support.firePropertyChange("distributable",
                                    oldDistributable,
                                    this.distributable);
-
-        // Bugzilla 32866
-        Manager manager = getManager();
-        if(manager != null) {
-            if(log.isDebugEnabled()) {
-                log.debug("Propagating distributable=" + distributable
-                          + " to manager");
-            }
-            manager.setDistributable(distributable);
-        }
     }
 
 
@@ -1835,20 +1822,20 @@ public class StandardContext extends ContainerBase
             this.manager = manager;
 
             // Stop the old component if necessary
-            if (getState().isAvailable() && (oldManager != null) &&
-                (oldManager instanceof Lifecycle)) {
+            if (oldManager instanceof Lifecycle) {
                 try {
                     ((Lifecycle) oldManager).stop();
+                    ((Lifecycle) oldManager).destroy();
                 } catch (LifecycleException e) {
-                    log.error("StandardContext.setManager: stop: ", e);
+                    log.error("StandardContext.setManager: stop-destroy: ", e);
                 }
             }
 
             // Start the new component if necessary
-            if (manager != null)
+            if (manager != null) {
                 manager.setContext(this);
-            if (getState().isAvailable() && (manager != null) &&
-                (manager instanceof Lifecycle)) {
+            }
+            if (getState().isAvailable() && manager instanceof Lifecycle) {
                 try {
                     ((Lifecycle) manager).start();
                 } catch (LifecycleException e) {
@@ -5078,10 +5065,6 @@ public class StandardContext extends ContainerBase
                 logger = null;
                 getLogger();
 
-                Cluster cluster = getClusterInternal();
-                if (cluster instanceof Lifecycle) {
-                    ((Lifecycle) cluster).start();
-                }
                 Realm realm = getRealmInternal();
                 if(null != realm) {
                     if (realm instanceof Lifecycle) {
@@ -5462,10 +5445,6 @@ public class StandardContext extends ContainerBase
             Realm realm = getRealmInternal();
             if (realm instanceof Lifecycle) {
                 ((Lifecycle) realm).stop();
-            }
-            Cluster cluster = getClusterInternal();
-            if (cluster instanceof Lifecycle) {
-                ((Lifecycle) cluster).stop();
             }
             Loader loader = getLoader();
             if (loader instanceof Lifecycle) {
@@ -6208,59 +6187,6 @@ public class StandardContext extends ContainerBase
 
     // ------------------------------------------------------------- Operations
 
-
-    /**
-     * JSR77 deploymentDescriptor attribute
-     *
-     * @return string deployment descriptor
-     */
-    public String getDeploymentDescriptor() {
-
-        InputStream stream = null;
-        ServletContext servletContext = getServletContext();
-        if (servletContext != null) {
-            stream = servletContext.getResourceAsStream(
-                org.apache.catalina.startup.Constants.ApplicationWebXml);
-        }
-        if (stream == null) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(stream))) {
-            String strRead = "";
-            while (strRead != null) {
-                sb.append(strRead);
-                strRead = br.readLine();
-            }
-        } catch (IOException e) {
-            return "";
-        }
-
-        return sb.toString();
-    }
-
-
-    /**
-     * JSR77 servlets attribute
-     *
-     * @return list of all servlets ( we know about )
-     */
-    public String[] getServlets() {
-
-        String[] result = null;
-
-        Container[] children = findChildren();
-        if (children != null) {
-            result = new String[children.length];
-            for( int i=0; i< children.length; i++ ) {
-                result[i] = children[i].getObjectName().toString();
-            }
-        }
-
-        return result;
-    }
-
-
     @Override
     protected String getObjectNameKeyProperties() {
 
@@ -6455,13 +6381,6 @@ public class StandardContext extends ContainerBase
         return tldValidation;
     }
 
-
-    /**
-     * @return support for "stateManageable" JSR77
-     */
-    public boolean isStateManageable() {
-        return true;
-    }
 
     /**
      * The J2EE Server ObjectName this module is deployed on.

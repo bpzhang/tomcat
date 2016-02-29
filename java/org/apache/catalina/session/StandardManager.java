@@ -191,12 +191,12 @@ public class StandardManager extends ManagerBase {
         }
         Loader loader = null;
         ClassLoader classLoader = null;
+        Log logger = null;
         try (FileInputStream fis = new FileInputStream(file.getAbsolutePath());
-                BufferedInputStream bis = new BufferedInputStream(fis);) {
+                BufferedInputStream bis = new BufferedInputStream(fis)) {
             Context c = getContext();
-            if (c != null) {
-                loader = c.getLoader();
-            }
+            loader = c.getLoader();
+            logger = c.getLogger();
             if (loader != null) {
                 classLoader = loader.getClassLoader();
             }
@@ -206,7 +206,9 @@ public class StandardManager extends ManagerBase {
 
             // Load the previously unloaded active sessions
             synchronized (sessions) {
-                try (ObjectInputStream ois = new CustomObjectInputStream(bis, classLoader)) {
+                try (ObjectInputStream ois = new CustomObjectInputStream(bis, classLoader, logger,
+                        getSessionAttributeValueClassNamePattern(),
+                        getWarnOnSessionAttributeFilterFailure())) {
                     Integer count = (Integer) ois.readObject();
                     int n = count.intValue();
                     if (log.isDebugEnabled())
@@ -225,17 +227,11 @@ public class StandardManager extends ManagerBase {
                         }
                         sessionCounter++;
                     }
-
+                } finally {
                     // Delete the persistent storage file
                     if (file.exists()) {
                         file.delete();
                     }
-                } catch (Throwable t) {
-                    // Clearing the partially loaded sessions here prevents the
-                    // stop() method overwriting the file where the session data
-                    // is stored.
-                    sessions.clear();
-                    throw t;
                 }
             }
         } catch (FileNotFoundException e) {
@@ -284,8 +280,6 @@ public class StandardManager extends ManagerBase {
             log.debug(sm.getString("standardManager.unloading.debug"));
 
         if (sessions.isEmpty()) {
-            // This is important in the case where the load fails since it
-            // prevents the overwriting of the data that failed to load.
             log.debug(sm.getString("standardManager.unloading.nosessions"));
             return; // nothing to do
         }
@@ -362,7 +356,7 @@ public class StandardManager extends ManagerBase {
             load();
         } catch (Throwable t) {
             ExceptionUtils.handleThrowable(t);
-            throw new LifecycleException(sm.getString("standardManager.managerLoad"), t);
+            log.error(sm.getString("standardManager.managerLoad"), t);
         }
 
         setState(LifecycleState.STARTING);
@@ -423,17 +417,16 @@ public class StandardManager extends ManagerBase {
      * @return the file
      */
     protected File file() {
-        if ((pathname == null) || (pathname.length() == 0))
-            return (null);
+        if (pathname == null || pathname.length() == 0) {
+            return null;
+        }
         File file = new File(pathname);
         if (!file.isAbsolute()) {
             Context context = getContext();
-            if (context != null) {
-                ServletContext servletContext = context.getServletContext();
-                File tempdir = (File)
-                    servletContext.getAttribute(ServletContext.TEMPDIR);
-                if (tempdir != null)
-                    file = new File(tempdir, pathname);
+            ServletContext servletContext = context.getServletContext();
+            File tempdir = (File) servletContext.getAttribute(ServletContext.TEMPDIR);
+            if (tempdir != null) {
+                file = new File(tempdir, pathname);
             }
         }
         return file;

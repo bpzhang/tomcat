@@ -50,48 +50,15 @@ public interface Manager {
 
 
     /**
-     * Set the Container with which this Manager is associated.
+     * Set the Context with which this Manager is associated. The Context must
+     * be set to a non-null value before the Manager is first used. Multiple
+     * calls to this method before first use are permitted. Once the Manager has
+     * been used, this method may not be used to change the Context (including
+     * setting a {@code null} value) that the Manager is associated with.
      *
      * @param context The newly associated Context
      */
     public void setContext(Context context);
-
-
-    /**
-     * Is this Manager marked as using distributable sessions?
-     *
-     * @return {@code true} if this manager is marked as distributable otherwise
-     *         {@code false}
-     */
-    public boolean getDistributable();
-
-
-    /**
-     * Configure whether this manager uses distributable sessions. If this flag
-     * is set, all user data objects added to sessions associated with this
-     * manager must implement Serializable.
-     *
-     * @param distributable The new distributable flag
-     */
-    public void setDistributable(boolean distributable);
-
-
-    /**
-     * Get the default time in seconds before a session managed by this manager
-     * will be considered inactive.
-     *
-     * @return The default maximum inactive interval in seconds
-     */
-    public int getMaxInactiveInterval();
-
-
-    /**
-     * Set the default maximum inactive interval (in seconds)
-     * for Sessions created by this Manager.
-     *
-     * @param interval The new default value
-     */
-    public void setMaxInactiveInterval(int interval);
 
 
     /**

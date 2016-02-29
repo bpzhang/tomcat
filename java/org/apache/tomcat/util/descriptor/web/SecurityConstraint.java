@@ -131,6 +131,7 @@ public class SecurityConstraint implements Serializable {
     /**
      * Was the "all roles" wildcard included in this authentication
      * constraint?
+     * @return <code>true</code> if all roles
      */
     public boolean getAllRoles() {
 
@@ -142,6 +143,7 @@ public class SecurityConstraint implements Serializable {
     /**
      * Was the "all authenticated users" wildcard included in this
      * authentication constraint?
+     * @return <code>true</code> if all authenticated users
      */
     public boolean getAuthenticatedUsers() {
         return this.authenticatedUsers;
@@ -151,6 +153,7 @@ public class SecurityConstraint implements Serializable {
     /**
      * Return the authorization constraint present flag for this security
      * constraint.
+     * @return <code>true</code> if this needs authorization
      */
     public boolean getAuthConstraint() {
 
@@ -162,6 +165,7 @@ public class SecurityConstraint implements Serializable {
     /**
      * Set the authorization constraint present flag for this security
      * constraint.
+     * @param authConstraint The new value
      */
     public void setAuthConstraint(boolean authConstraint) {
 
@@ -171,7 +175,7 @@ public class SecurityConstraint implements Serializable {
 
 
     /**
-     * Return the display name of this security constraint.
+     * @return the display name of this security constraint.
      */
     public String getDisplayName() {
 
@@ -182,6 +186,7 @@ public class SecurityConstraint implements Serializable {
 
     /**
      * Set the display name of this security constraint.
+     * @param displayName The new value
      */
     public void setDisplayName(String displayName) {
 
@@ -192,6 +197,7 @@ public class SecurityConstraint implements Serializable {
 
     /**
      * Return the user data constraint for this security constraint.
+     * @return the user constraint
      */
     public String getUserConstraint() {
 
@@ -285,10 +291,11 @@ public class SecurityConstraint implements Serializable {
 
 
     /**
-     * Return <code>true</code> if the specified role is permitted access to
-     * the resources protected by this security constraint.
+     * Check a role.
      *
      * @param role Role name to be checked
+     * @return <code>true</code> if the specified role is permitted access to
+     * the resources protected by this security constraint.
      */
     public boolean findAuthRole(String role) {
 
@@ -308,6 +315,7 @@ public class SecurityConstraint implements Serializable {
      * protected by this security constraint.  If none have been defined,
      * a zero-length array is returned (which implies that all authenticated
      * users are permitted access).
+     * @return the roles array
      */
     public String[] findAuthRoles() {
 
@@ -321,6 +329,7 @@ public class SecurityConstraint implements Serializable {
      * otherwise, return <code>null</code>.
      *
      * @param name Web resource collection name to return
+     * @return the collection
      */
     public SecurityCollection findCollection(String name) {
 
@@ -339,6 +348,7 @@ public class SecurityConstraint implements Serializable {
      * Return all of the web resource collections protected by this
      * security constraint.  If there are none, a zero-length array is
      * returned.
+     * @return the collections array
      */
     public SecurityCollection[] findCollections() {
 
@@ -348,11 +358,11 @@ public class SecurityConstraint implements Serializable {
 
 
     /**
-     * Return <code>true</code> if the specified context-relative URI (and
-     * associated HTTP method) are protected by this security constraint.
-     *
+     * Check if the contraint applies to a URI and method.
      * @param uri Context-relative URI to check
      * @param method Request method being used
+     * @return <code>true</code> if the specified context-relative URI (and
+     * associated HTTP method) are protected by this security constraint.
      */
     public boolean included(String uri, String method) {
 
@@ -714,32 +724,8 @@ public class SecurityConstraint implements Serializable {
             // pattern is fully covered.
             omittedMethods.removeAll(methods);
 
-            if (omittedMethods.size() > 0) {
-                StringBuilder msg = new StringBuilder();
-                for (String method : omittedMethods) {
-                    msg.append(method);
-                    msg.append(' ');
-                }
-                if (denyUncoveredHttpMethods) {
-                    log.info(sm.getString(
-                            "securityConstraint.uncoveredHttpOmittedMethodFix",
-                            pattern, msg.toString().trim()));
-                    SecurityCollection collection = new SecurityCollection();
-                    for (String method : omittedMethods) {
-                        collection.addMethod(method);
-                    }
-                    collection.addPattern(pattern);
-                    collection.setName("deny-uncovered-http-methods");
-                    SecurityConstraint constraint = new SecurityConstraint();
-                    constraint.setAuthConstraint(true);
-                    constraint.addCollection(collection);
-                    newConstraints.add(constraint);
-                } else {
-                    log.error(sm.getString(
-                            "securityConstraint.uncoveredHttpOmittedMethod",
-                            pattern, msg.toString().trim()));
-                }
-            }
+            handleOmittedMethods(omittedMethods, pattern, denyUncoveredHttpMethods,
+                    newConstraints, log);
         }
         for (Map.Entry<String, Set<String>> entry :
                 urlOmittedMethodMap.entrySet()) {
@@ -749,37 +735,41 @@ public class SecurityConstraint implements Serializable {
                 continue;
             }
 
-            Set<String> omittedMethods = entry.getValue();
-
-            if (omittedMethods.size() > 0) {
-                StringBuilder msg = new StringBuilder();
-                for (String method : omittedMethods) {
-                    msg.append(method);
-                    msg.append(' ');
-                }
-                if (denyUncoveredHttpMethods) {
-                    log.info(sm.getString(
-                            "securityConstraint.uncoveredHttpOmittedMethodFix",
-                            pattern, msg.toString().trim()));
-                    SecurityCollection collection = new SecurityCollection();
-                    for (String method : omittedMethods) {
-                        collection.addMethod(method);
-                    }
-                    collection.addPattern(pattern);
-                    collection.setName("deny-uncovered-http-methods");
-                    SecurityConstraint constraint = new SecurityConstraint();
-                    constraint.setAuthConstraint(true);
-                    constraint.addCollection(collection);
-                    newConstraints.add(constraint);
-                } else {
-                    log.error(sm.getString(
-                            "securityConstraint.uncoveredHttpOmittedMethod",
-                            pattern, msg.toString().trim()));
-                }
-            }
+            handleOmittedMethods(entry.getValue(), pattern, denyUncoveredHttpMethods,
+                    newConstraints, log);
         }
 
-        return newConstraints.toArray(
-                new SecurityConstraint[newConstraints.size()]);
+        return newConstraints.toArray(new SecurityConstraint[newConstraints.size()]);
+    }
+
+
+    private static void handleOmittedMethods(Set<String> omittedMethods, String pattern,
+            boolean denyUncoveredHttpMethods, List<SecurityConstraint> newConstraints, Log log) {
+        if (omittedMethods.size() > 0) {
+            StringBuilder msg = new StringBuilder();
+            for (String method : omittedMethods) {
+                msg.append(method);
+                msg.append(' ');
+            }
+            if (denyUncoveredHttpMethods) {
+                log.info(sm.getString(
+                        "securityConstraint.uncoveredHttpOmittedMethodFix",
+                        pattern, msg.toString().trim()));
+                SecurityCollection collection = new SecurityCollection();
+                for (String method : omittedMethods) {
+                    collection.addMethod(method);
+                }
+                collection.addPattern(pattern);
+                collection.setName("deny-uncovered-http-methods");
+                SecurityConstraint constraint = new SecurityConstraint();
+                constraint.setAuthConstraint(true);
+                constraint.addCollection(collection);
+                newConstraints.add(constraint);
+            } else {
+                log.error(sm.getString(
+                        "securityConstraint.uncoveredHttpOmittedMethod",
+                        pattern, msg.toString().trim()));
+            }
+        }
     }
 }

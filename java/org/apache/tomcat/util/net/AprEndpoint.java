@@ -20,15 +20,15 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
-import java.nio.channels.CompletionHandler;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
@@ -54,6 +54,7 @@ import org.apache.tomcat.util.buf.ByteBufferUtils;
 import org.apache.tomcat.util.net.AbstractEndpoint.Acceptor.AcceptorState;
 import org.apache.tomcat.util.net.AbstractEndpoint.Handler.SocketState;
 import org.apache.tomcat.util.net.SSLHostConfig.Type;
+import org.apache.tomcat.util.net.openssl.OpenSSLEngine;
 
 
 /**
@@ -346,13 +347,32 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
         if (isSSLEnabled()) {
             for (SSLHostConfig sslHostConfig : sslHostConfigs.values()) {
 
-                for (SSLHostConfigCertificate certificate : sslHostConfig.getCertificates(true)) {
+                Set<SSLHostConfigCertificate> certificates = sslHostConfig.getCertificates(true);
+                boolean firstCertificate = true;
+                for (SSLHostConfigCertificate certificate : certificates) {
                     if (SSLHostConfig.adjustRelativePath(certificate.getCertificateFile()) == null) {
                         // This is required
                         throw new Exception(sm.getString("endpoint.apr.noSslCertFile"));
                     }
+                    if (firstCertificate) {
+                        // TODO: Duplicates code in SSLUtilBase. Consider
+                        //       refactoring to reduce duplication
+                        firstCertificate = false;
+                        // Configure the enabled protocols
+                        List<String> enabledProtocols = SSLUtilBase.getEnabled("protocols", log,
+                                true, sslHostConfig.getProtocols(),
+                                OpenSSLEngine.IMPLEMENTED_PROTOCOLS_SET);
+                        sslHostConfig.setEnabledProtocols(
+                                enabledProtocols.toArray(new String[enabledProtocols.size()]));
+                        // Configure the enabled ciphers
+                        List<String> enabledCiphers = SSLUtilBase.getEnabled("ciphers", log,
+                                false, sslHostConfig.getJsseCipherNames(),
+                                OpenSSLEngine.AVAILABLE_CIPHER_SUITES);
+                        sslHostConfig.setEnabledCiphers(
+                                enabledCiphers.toArray(new String[enabledCiphers.size()]));
+                    }
                 }
-                if (sslHostConfig.getCertificates().size() > 2) {
+                if (certificates.size() > 2) {
                     // TODO: Can this limitation be removed?
                     throw new Exception(sm.getString("endpoint.apr.tooManyCertFiles"));
                 }
@@ -708,6 +728,10 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
 
     /**
      * Process the specified connection.
+     * @param socketWrapper The socket wrapper
+     * @return <code>true</code> if the socket was correctly configured
+     *  and processing may continue, <code>false</code> if the socket needs to be
+     *  close immediately
      */
     protected boolean setSocketOptions(SocketWrapperBase<Long> socketWrapper) {
         long socket = socketWrapper.getSocket().longValue();
@@ -764,6 +788,10 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
 
     /**
      * Allocate a new poller of the specified size.
+     * @param size The size
+     * @param pool The pool from which the poller will be allocated
+     * @param timeout The timeout
+     * @return the poller pointer
      */
     protected long allocatePoller(int size, long pool, int timeout) {
         try {
@@ -782,6 +810,10 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
     /**
      * Process given socket. This is called when the socket has been
      * accepted.
+     * @param socket The socket
+     * @return <code>true</code> if the socket was correctly configured
+     *  and processing may continue, <code>false</code> if the socket needs to be
+     *  close immediately
      */
     protected boolean processSocketWithOptions(long socket) {
         try {
@@ -1812,7 +1844,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                             }
                         }
 
-                        if (reset) {
+                        if (reset && pollerRunning) {
                             // Reallocate the current poller
                             int count = Poll.pollset(pollers[i], desc);
                             long newPoller = allocatePoller(actualPollerSize, pool, -1);
@@ -2601,12 +2633,6 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
 
 
         @Override
-        public boolean isReadPending() {
-            return false;
-        }
-
-
-        @Override
         public void registerReadInterest() {
             // Make sure an already closed socket is not added to the poller
             synchronized (closedLock) {
@@ -2758,31 +2784,6 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
             // Configure connection to require a certificate
             SSLSocket.setVerify(socket, SSL.SSL_CVERIFY_REQUIRE, -1);
             SSLSocket.renegotiate(socket);
-        }
-
-
-        @Override
-        public boolean isWritePending() {
-            return false;
-        }
-
-
-        @Override
-        public <A> CompletionState read(ByteBuffer[] dsts, int offset,
-                int length, boolean block, long timeout, TimeUnit unit,
-                A attachment, CompletionCheck check,
-                CompletionHandler<Long, ? super A> handler) {
-            // TODO Auto-generated method stub
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public <A> CompletionState write(ByteBuffer[] srcs, int offset,
-                int length, boolean block, long timeout, TimeUnit unit,
-                A attachment, CompletionCheck check,
-                CompletionHandler<Long, ? super A> handler) {
-            // TODO Auto-generated method stub
-            throw new UnsupportedOperationException();
         }
     }
 }

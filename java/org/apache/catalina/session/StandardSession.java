@@ -1145,15 +1145,11 @@ public class StandardSession implements HttpSession, Session, Serializable {
      */
     @Override
     public ServletContext getServletContext() {
-
-        if (manager == null)
-            return (null);
+        if (manager == null) {
+            return null;
+        }
         Context context = manager.getContext();
-        if (context == null)
-            return (null);
-        else
-            return (context.getServletContext());
-
+        return context.getServletContext();
     }
 
 
@@ -1466,7 +1462,7 @@ public class StandardSession implements HttpSession, Session, Serializable {
             throw new IllegalStateException(sm.getString(
                     "standardSession.setAttribute.ise", getIdInternal()));
         }
-        if ((manager != null) && manager.getDistributable() &&
+        if ((manager != null) && manager.getContext().getDistributable() &&
                 !isAttributeDistributable(name, value) && !exclude(name, value)) {
             throw new IllegalArgumentException(sm.getString(
                     "standardSession.setAttribute.iae", name));
@@ -1693,9 +1689,9 @@ public class StandardSession implements HttpSession, Session, Serializable {
         ArrayList<Object> saveValues = new ArrayList<>();
         for (int i = 0; i < keys.length; i++) {
             Object value = attributes.get(keys[i]);
-            if (value == null)
+            if (value == null) {
                 continue;
-            else if (isAttributeDistributable(keys[i], value) && !exclude(keys[i], value)) {
+            } else if (isAttributeDistributable(keys[i], value) && !exclude(keys[i], value)) {
                 saveNames.add(keys[i]);
                 saveValues.add(value);
             } else {
@@ -1739,7 +1735,7 @@ public class StandardSession implements HttpSession, Session, Serializable {
 
     /**
      * Should the given session attribute be excluded? This implementation
-     * checks:</p>
+     * checks:
      * <ul>
      * <li>{@link Constants#excludedAttributeNames}</li>
      * <li>{@link Manager#willAttributeDistribute(String, Object)}</li>
@@ -1753,14 +1749,23 @@ public class StandardSession implements HttpSession, Session, Serializable {
      * @param value The attribute value
      *
      * @return {@code true} if the attribute should be excluded from
-     *         distribution, otherwise {@false}
+     *         distribution, otherwise {@code false}
      */
     protected boolean exclude(String name, Object value) {
         if (Constants.excludedAttributeNames.contains(name)) {
             return true;
         }
+
+        // Manager is required for remaining check
+        Manager manager = getManager();
+        if (manager == null) {
+            // Manager may be null during replication of new sessions in a
+            // cluster. Avoid the NPE.
+            return false;
+        }
+
         // Last check so use a short-cut
-        return !getManager().willAttributeDistribute(name, value);
+        return !manager.willAttributeDistribute(name, value);
     }
 
 

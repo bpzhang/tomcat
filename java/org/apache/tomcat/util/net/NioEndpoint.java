@@ -27,7 +27,6 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.channels.CancelledKeyException;
-import java.nio.channels.CompletionHandler;
 import java.nio.channels.FileChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
@@ -382,6 +381,10 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
 
     /**
      * Process the specified connection.
+     * @param socket The socket channel
+     * @return <code>true</code> if the socket was correctly configured
+     *  and processing may continue, <code>false</code> if the socket needs to be
+     *  close immediately
      */
     protected boolean setSocketOptions(SocketChannel socket) {
         // Process the connection
@@ -821,22 +824,9 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
 
                 boolean hasEvents = false;
 
-                // Time to terminate?
-                if (close) {
-                    events();
-                    timeout(0, false);
-                    try {
-                        selector.close();
-                    } catch (IOException ioe) {
-                        log.error(sm.getString(
-                                "endpoint.nio.selectorCloseFail"), ioe);
-                    }
-                    break;
-                } else {
-                    hasEvents = events();
-                }
                 try {
-                    if ( !close ) {
+                    if (!close) {
+                        hasEvents = events();
                         if (wakeupCounter.getAndSet(-1) > 0) {
                             //if we are here, means we have other stuff to do
                             //do a non blocking select
@@ -852,8 +842,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
                         try {
                             selector.close();
                         } catch (IOException ioe) {
-                            log.error(sm.getString(
-                                    "endpoint.nio.selectorCloseFail"), ioe);
+                            log.error(sm.getString("endpoint.nio.selectorCloseFail"), ioe);
                         }
                         break;
                     }
@@ -1311,12 +1300,6 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
 
 
         @Override
-        public boolean isReadPending() {
-            return false;
-        }
-
-
-        @Override
         public void registerReadInterest() {
             getPoller().add(getSocket(), SelectionKey.OP_READ);
         }
@@ -1422,32 +1405,9 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
                     sslChannel.rehandshake(getEndpoint().getSoTimeout());
                     ((JSSESupport) sslSupport).setSession(engine.getSession());
                 } catch (IOException ioe) {
-                    log.warn(sm.getString("http11processor.socket.sslreneg",ioe));
+                    log.warn(sm.getString("socket.sslreneg",ioe));
                 }
             }
-        }
-
-        @Override
-        public boolean isWritePending() {
-            return false;
-        }
-
-        @Override
-        public <A> CompletionState read(ByteBuffer[] dsts, int offset,
-                int length, boolean block, long timeout, TimeUnit unit,
-                A attachment, CompletionCheck check,
-                CompletionHandler<Long, ? super A> handler) {
-            // TODO Auto-generated method stub
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public <A> CompletionState write(ByteBuffer[] srcs, int offset,
-                int length, boolean block, long timeout, TimeUnit unit,
-                A attachment, CompletionCheck check,
-                CompletionHandler<Long, ? super A> handler) {
-            // TODO Auto-generated method stub
-            throw new UnsupportedOperationException();
         }
     }
 

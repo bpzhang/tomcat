@@ -38,6 +38,10 @@ public final class IntrospectionUtils {
      * Find a method with the right name If found, call the method ( if param is
      * int or boolean we'll convert value to the right type before) - that means
      * you can have setDebug(1).
+     * @param o The object to set a property on
+     * @param name The property name
+     * @param value The property value
+     * @return <code>true</code> if operation was successful
      */
     public static boolean setProperty(Object o, String name, String value) {
         return setProperty(o,name,value,true);
@@ -216,6 +220,10 @@ public final class IntrospectionUtils {
             log.warn("IntrospectionUtils: IllegalAccessException for " +
                     o.getClass() + " " + name + ")", iae);
         } catch (InvocationTargetException ie) {
+            if (ie.getCause() instanceof NullPointerException) {
+                // Assume the underlying object uses a storage to represent an unset property
+                return null;
+            }
             ExceptionUtils.handleThrowable(ie.getCause());
             log.warn("IntrospectionUtils: InvocationTargetException for " +
                     o.getClass() + " " + name + ")", ie);
@@ -224,7 +232,11 @@ public final class IntrospectionUtils {
     }
 
     /**
-     * Replace ${NAME} with the property value
+     * Replace ${NAME} with the property value.
+     * @param value The value
+     * @param staticProp Replacement properties
+     * @param dynamicProp Replacement properties
+     * @return the replacement value
      */
     public static String replaceProperties(String value,
             Hashtable<Object,Object> staticProp, PropertySource dynamicProp[]) {
@@ -278,7 +290,9 @@ public final class IntrospectionUtils {
     }
 
     /**
-     * Reverse of Introspector.decapitalize
+     * Reverse of Introspector.decapitalize.
+     * @param name The name
+     * @return the capitalized string
      */
     public static String capitalize(String name) {
         if (name == null || name.length() == 0) {

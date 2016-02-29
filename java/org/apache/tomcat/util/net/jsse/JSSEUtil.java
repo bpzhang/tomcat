@@ -96,12 +96,15 @@ public class JSSEUtil extends SSLUtilBase {
         implementedProtocols = new HashSet<>();
         try (SSLServerSocket socket = (SSLServerSocket) ssf.createServerSocket()) {
             // Filter out all the SSL protocols (SSLv2 and SSLv3) from the
-            // defaults
-            // since they are no longer considered secure
+            // defaults since they are no longer considered secure but allow
+            // SSLv2Hello
             for (String protocol : socket.getEnabledProtocols()) {
-                if (protocol.toUpperCase(Locale.ENGLISH).contains("SSL")) {
-                    log.debug(sm.getString("jsse.excludeDefaultProtocol", protocol));
-                    continue;
+                String protocolUpper = protocol.toUpperCase(Locale.ENGLISH);
+                if (!"SSLV2HELLO".equals(protocolUpper)) {
+                    if (protocolUpper.contains("SSL")) {
+                        log.debug(sm.getString("jsse.excludeDefaultProtocol", protocol));
+                        continue;
+                    }
                 }
                 implementedProtocols.add(protocol);
             }
@@ -354,6 +357,7 @@ public class JSSEUtil extends SSLUtilBase {
      * @param crlf The path to the CRL file.
      * @param trustStore The configured TrustStore.
      * @return The parameters including the CRLs and TrustStore.
+     * @throws Exception An error occurred
      */
     protected CertPathParameters getParameters(String algorithm, String crlf,
             KeyStore trustStore) throws Exception {
@@ -376,7 +380,11 @@ public class JSSEUtil extends SSLUtilBase {
 
     /**
      * Load the collection of CRLs.
-     *
+     * @param crlf The path to the CRL file.
+     * @return the CRLs collection
+     * @throws IOException Error reading CRL file
+     * @throws CRLException CRL error
+     * @throws CertificateException Error processing certificate
      */
     protected Collection<? extends CRL> getCRLs(String crlf)
         throws IOException, CRLException, CertificateException {

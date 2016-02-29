@@ -16,7 +16,6 @@
  */
 package org.apache.coyote.ajp;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 
 import org.apache.coyote.AbstractProtocol;
@@ -85,6 +84,24 @@ public abstract class AbstractAjpProtocol<S> extends AbstractProtocol<S> {
 
     // ------------------------------------------------- AJP specific properties
     // ------------------------------------------ managed in the ProtocolHandler
+
+    /**
+     * Send AJP flush packet when flushing.
+     * An flush packet is a zero byte AJP13 SEND_BODY_CHUNK
+     * packet. mod_jk and mod_proxy_ajp interprete this as
+     * a request to flush data to the client.
+     * AJP always does flush at the and of the response, so if
+     * it is not important, that the packets get streamed up to
+     * the client, do not use extra flush packets.
+     * For compatibility and to stay on the safe side, flush
+     * packets are enabled by default.
+     */
+    protected boolean ajpFlush = true;
+    public boolean getAjpFlush() { return ajpFlush; }
+    public void setAjpFlush(boolean ajpFlush) {
+        this.ajpFlush = ajpFlush;
+    }
+
 
     /**
      * Should authentication be done in the native web server layer,
@@ -161,6 +178,7 @@ public abstract class AbstractAjpProtocol<S> extends AbstractProtocol<S> {
     protected Processor createProcessor() {
         AjpProcessor processor = new AjpProcessor(getPacketSize(), getEndpoint());
         processor.setAdapter(getAdapter());
+        processor.setAjpFlush(getAjpFlush());
         processor.setTomcatAuthentication(getTomcatAuthentication());
         processor.setTomcatAuthorization(getTomcatAuthorization());
         processor.setRequiredSecret(requiredSecret);
@@ -172,8 +190,8 @@ public abstract class AbstractAjpProtocol<S> extends AbstractProtocol<S> {
 
     @Override
     protected Processor createUpgradeProcessor(SocketWrapperBase<?> socket,
-            ByteBuffer leftoverInput, UpgradeToken upgradeToken) throws IOException {
-        throw new IOException(sm.getString("ajpprotocol.noUpgradeHandler",
+            ByteBuffer leftoverInput, UpgradeToken upgradeToken) {
+        throw new IllegalStateException(sm.getString("ajpprotocol.noUpgradeHandler",
                 upgradeToken.getHttpUpgradeHandler().getClass().getName()));
     }
 }

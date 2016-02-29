@@ -42,7 +42,6 @@ public abstract class SocketWrapperBase<E> {
     private volatile long writeTimeout = -1;
 
     private volatile int keepAliveLeft = 100;
-    private boolean keptAlive = false;
     private volatile boolean upgraded = false;
     private boolean secure = false;
     private String negotiatedProtocol = null;
@@ -148,8 +147,6 @@ public abstract class SocketWrapperBase<E> {
 
     public void setKeepAliveLeft(int keepAliveLeft) { this.keepAliveLeft = keepAliveLeft;}
     public int decrementKeepAlive() { return (--keepAliveLeft);}
-    public boolean isKeptAlive() {return keptAlive;}
-    public void setKeptAlive(boolean keptAlive) {this.keptAlive = keptAlive;}
 
     public String getRemoteHost() {
         if (remoteHost == null) {
@@ -208,8 +205,6 @@ public abstract class SocketWrapperBase<E> {
         return blockingStatusWriteLock;
     }
     public SocketBufferHandler getSocketBufferHandler() { return socketBufferHandler; }
-    public abstract boolean isReadPending();
-    public abstract boolean isWritePending();
 
     public boolean hasDataToWrite() {
         return !socketBufferHandler.isWriteBufferEmpty() || bufferedWrites.size() > 0;
@@ -660,6 +655,52 @@ public abstract class SocketWrapperBase<E> {
     }
 
     /**
+     * Allows checking if an asynchronous read operation is currently pending.
+     * @return <code>true</code> if the endpoint supports asynchronous IO and
+     *  a read operation is being processed asynchronously
+     */
+    public boolean isReadPending() {
+        return false;
+    }
+
+    /**
+     * Allows checking if an asynchronous write operation is currently pending.
+     * @return <code>true</code> if the endpoint supports asynchronous IO and
+     *  a write operation is being processed asynchronously
+     */
+    public boolean isWritePending() {
+        return false;
+    }
+
+    /**
+     * If an asynchronous read operation is pending, this method will block
+     * until the operation completes, or the specified amount of time
+     * has passed.
+     * @param timeout The maximum amount of time to wait
+     * @param unit The unit for the timeout
+     * @return <code>true</code> if the read operation is complete,
+     *  <code>false</code> if the operation is still pending and
+     *  the specified timeout has passed
+     */
+    public boolean awaitReadComplete(long timeout, TimeUnit unit) {
+        return true;
+    }
+
+    /**
+     * If an asynchronous write operation is pending, this method will block
+     * until the operation completes, or the specified amount of time
+     * has passed.
+     * @param timeout The maximum amount of time to wait
+     * @param unit The unit for the timeout
+     * @return <code>true</code> if the read operation is complete,
+     *  <code>false</code> if the operation is still pending and
+     *  the specified timeout has passed
+     */
+    public boolean awaitWriteComplete(long timeout, TimeUnit unit) {
+        return true;
+    }
+
+    /**
      * Scatter read. The completion handler will be called once some
      * data has been read or an error occurred. If a CompletionCheck
      * object has been provided, the completion handler will only be
@@ -680,9 +721,10 @@ public abstract class SocketWrapperBase<E> {
      * @param check for the IO operation completion
      * @param handler to call when the IO is complete
      * @param dsts buffers
+     * @param <A> The attachment type
      * @return the completion state (done, done inline, or still pending)
      */
-    public <A> CompletionState read(boolean block, long timeout, TimeUnit unit, A attachment,
+    public final <A> CompletionState read(boolean block, long timeout, TimeUnit unit, A attachment,
             CompletionCheck check, CompletionHandler<Long, ? super A> handler,
             ByteBuffer... dsts) {
         if (dsts == null) {
@@ -714,11 +756,14 @@ public abstract class SocketWrapperBase<E> {
      *        used when calling the completion handler
      * @param check for the IO operation completion
      * @param handler to call when the IO is complete
+     * @param <A> The attachment type
      * @return the completion state (done, done inline, or still pending)
      */
-    public abstract <A> CompletionState read(ByteBuffer[] dsts, int offset, int length,
+    public <A> CompletionState read(ByteBuffer[] dsts, int offset, int length,
             boolean block, long timeout, TimeUnit unit, A attachment,
-            CompletionCheck check, CompletionHandler<Long, ? super A> handler);
+            CompletionCheck check, CompletionHandler<Long, ? super A> handler) {
+        throw new UnsupportedOperationException();
+    }
 
     /**
      * Gather write. The completion handler will be called once some
@@ -742,9 +787,10 @@ public abstract class SocketWrapperBase<E> {
      * @param check for the IO operation completion
      * @param handler to call when the IO is complete
      * @param srcs buffers
+     * @param <A> The attachment type
      * @return the completion state (done, done inline, or still pending)
      */
-    public <A> CompletionState write(boolean block, long timeout, TimeUnit unit, A attachment,
+    public final <A> CompletionState write(boolean block, long timeout, TimeUnit unit, A attachment,
             CompletionCheck check, CompletionHandler<Long, ? super A> handler,
             ByteBuffer... srcs) {
         if (srcs == null) {
@@ -777,11 +823,14 @@ public abstract class SocketWrapperBase<E> {
      *        used when calling the completion handler
      * @param check for the IO operation completion
      * @param handler to call when the IO is complete
+     * @param <A> The attachment type
      * @return the completion state (done, done inline, or still pending)
      */
-    public abstract <A> CompletionState write(ByteBuffer[] srcs, int offset, int length,
+    public <A> CompletionState write(ByteBuffer[] srcs, int offset, int length,
             boolean block, long timeout, TimeUnit unit, A attachment,
-            CompletionCheck check, CompletionHandler<Long, ? super A> handler);
+            CompletionCheck check, CompletionHandler<Long, ? super A> handler) {
+        throw new UnsupportedOperationException();
+    }
 
 
     // --------------------------------------------------------- Utility methods

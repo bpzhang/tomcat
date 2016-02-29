@@ -16,7 +16,6 @@
  */
 package org.apache.coyote;
 
-import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.Collections;
@@ -434,7 +433,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
 
     protected abstract Processor createUpgradeProcessor(
             SocketWrapperBase<?> socket, ByteBuffer leftoverInput,
-            UpgradeToken upgradeToken) throws IOException;
+            UpgradeToken upgradeToken);
 
 
     // ----------------------------------------------------- JMX related methods
@@ -798,7 +797,6 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                     // In the middle of processing a request/response. Keep the
                     // socket associated with the processor. Exact requirements
                     // depend on type of long poll
-                    connections.put(socket, processor);
                     longPoll(wrapper, processor);
                     if (processor.isAsync()) {
                         getProtocol().addWaitingProcessor(processor);
