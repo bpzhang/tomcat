@@ -65,8 +65,6 @@ import org.apache.tomcat.util.res.StringManager;
  * <br>
  * Note:
  * <ul>
- * <li>Tomcat needs to be configured with honorCipherOrder="false" otherwise
- *     Tomcat will prefer a cipher suite that is blacklisted by HTTP/2.</li>
  * <li>You will need to nest an &lt;UpgradeProtocol
  *     className="org.apache.coyote.http2.Http2Protocol" /&gt; element inside
  *     a TLS enabled Connector element in server.xml to enable HTTP/2 support.
@@ -141,6 +139,10 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
     private final Map<AbstractStream,int[]> backLogStreams = new ConcurrentHashMap<>();
     private long backLogSize = 0;
 
+    // Stream concurrency control
+    private int maxConcurrentStreamExecution = Http2Protocol.DEFAULT_MAX_CONCURRENT_STREAM_EXECUTION;
+    private AtomicInteger streamConcurrency = null;
+    private Queue<StreamProcessor> queuedProcessors = null;
 
     public Http2UpgradeHandler(Adapter adapter, Request coyoteRequest) {
         super (STREAM_ID_ZERO);
@@ -174,6 +176,12 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
 
         if (!connectionState.compareAndSet(ConnectionState.NEW, ConnectionState.CONNECTED)) {
             return;
+        }
+
+        // Init concurrency control if needed
+        if (maxConcurrentStreamExecution < localSettings.getMaxConcurrentStreams()) {
+            streamConcurrency = new AtomicInteger(0);
+            queuedProcessors = new ConcurrentLinkedQueue<>();
         }
 
         parser = new Http2Parser(connectionId, this, this);
@@ -244,7 +252,7 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
 
         if (webConnection != null) {
             // Process the initial request on a container thread
-            StreamProcessor streamProcessor = new StreamProcessor(stream, adapter, socketWrapper);
+            StreamProcessor streamProcessor = new StreamProcessor(this, stream, adapter, socketWrapper);
             streamProcessor.setSslSupport(sslSupport);
             socketWrapper.getEndpoint().getExecutor().execute(streamProcessor);
         }
@@ -295,7 +303,12 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
                         } catch (StreamException se) {
                             // Stream errors are not fatal to the connection so
                             // continue reading frames
-                            resetStream(se);
+                            Stream stream = getStream(se.getStreamId(), false);
+                            if (stream == null) {
+                                sendStreamReset(se);
+                            } else {
+                                stream.close(se);
+                            }
                         }
                     }
                     // No more frames to read so switch to the keep-alive
@@ -386,7 +399,34 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
     }
 
 
-    void resetStream(StreamException se) throws IOException {
+    private int increaseStreamConcurrency() {
+        return streamConcurrency.incrementAndGet();
+    }
+
+    private int decreaseStreamConcurrency() {
+        return streamConcurrency.decrementAndGet();
+    }
+
+    private int getStreamConcurrency() {
+        return streamConcurrency.get();
+    }
+
+    void executeQueuedStream() {
+        if (streamConcurrency == null) {
+            return;
+        }
+        decreaseStreamConcurrency();
+        if (getStreamConcurrency() < maxConcurrentStreamExecution) {
+            StreamProcessor streamProcessor = queuedProcessors.poll();
+            if (streamProcessor != null) {
+                increaseStreamConcurrency();
+                socketWrapper.getEndpoint().getExecutor().execute(streamProcessor);
+            }
+        }
+    }
+
+
+    void sendStreamReset(StreamException se) throws IOException {
 
         if (log.isDebugEnabled()) {
             log.debug(sm.getString("upgradeHandler.rst.debug", connectionId,
@@ -987,14 +1027,12 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
         pushStream.sentPushPromise();
 
         // Process this stream on a container thread
-        StreamProcessor streamProcessor = new StreamProcessor(pushStream, adapter, socketWrapper);
+        StreamProcessor streamProcessor = new StreamProcessor(this, pushStream, adapter, socketWrapper);
         streamProcessor.setSslSupport(sslSupport);
+        if (streamConcurrency != null) {
+            increaseStreamConcurrency();
+        }
         socketWrapper.getEndpoint().getExecutor().execute(streamProcessor);
-    }
-
-
-    String getProperty(String key) {
-        return socketWrapper.getEndpoint().getProperty(key);
     }
 
 
@@ -1044,6 +1082,11 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
 
     public void setMaxConcurrentStreams(long maxConcurrentStreams) {
         localSettings.set(Setting.MAX_CONCURRENT_STREAMS, maxConcurrentStreams);
+    }
+
+
+    public void setMaxConcurrentStreamExecution(int maxConcurrentStreamExecution) {
+        this.maxConcurrentStreamExecution = maxConcurrentStreamExecution;
     }
 
 
@@ -1202,9 +1245,18 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
         Stream stream = getStream(streamId, connectionState.get().isNewStreamAllowed());
         if (stream != null) {
             // Process this stream on a container thread
-            StreamProcessor streamProcessor = new StreamProcessor(stream, adapter, socketWrapper);
+            StreamProcessor streamProcessor = new StreamProcessor(this, stream, adapter, socketWrapper);
             streamProcessor.setSslSupport(sslSupport);
-            socketWrapper.getEndpoint().getExecutor().execute(streamProcessor);
+            if (streamConcurrency == null) {
+                socketWrapper.getEndpoint().getExecutor().execute(streamProcessor);
+            } else {
+                if (getStreamConcurrency() < maxConcurrentStreamExecution) {
+                    increaseStreamConcurrency();
+                    socketWrapper.getEndpoint().getExecutor().execute(streamProcessor);
+                } else {
+                    queuedProcessors.offer(streamProcessor);
+                }
+            }
         }
     }
 
@@ -1220,7 +1272,7 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
     public void reset(int streamId, long errorCode) throws Http2Exception  {
         Stream stream = getStream(streamId, true);
         stream.checkState(FrameType.RST);
-        stream.reset(errorCode);
+        stream.receiveReset(errorCode);
     }
 
 
@@ -1236,17 +1288,11 @@ public class Http2UpgradeHandler extends AbstractStream implements InternalHttpU
                 try {
                     stream.incrementWindowSize(diff);
                 } catch (Http2Exception h2e) {
-                    try {
-                        resetStream(new StreamException(sm.getString(
-                                "upgradeHandler.windowSizeTooBig", connectionId,
-                                stream.getIdentifier()),
-                                h2e.getError(), stream.getIdentifier().intValue()));
-                    } catch (IOException ioe) {
-                        if (log.isDebugEnabled()) {
-                            log.debug(sm.getString("upgradeHandler.socketCloseFailed"), ioe);
-                        }
-                    }
-                }
+                    stream.close(new StreamException(sm.getString(
+                            "upgradeHandler.windowSizeTooBig", connectionId,
+                            stream.getIdentifier()),
+                            h2e.getError(), stream.getIdentifier().intValue()));
+               }
             }
         } else {
             remoteSettings.set(setting, value);

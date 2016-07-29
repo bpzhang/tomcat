@@ -16,11 +16,18 @@
  */
 package org.apache.coyote.http11;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.io.Reader;
 import java.io.Writer;
+import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketAddress;
 import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -31,6 +38,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
 import javax.servlet.AsyncContext;
+import javax.servlet.DispatcherType;
 import javax.servlet.ServletException;
 import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServlet;
@@ -709,11 +717,21 @@ public class TestHttp11Processor extends TomcatBaseTest {
      * async processing.
      */
     @Test
-    public void testBug57621() throws Exception {
+    public void testBug57621a() throws Exception {
+        doTestBug57621(true);
+    }
 
+
+    @Test
+    public void testBug57621b() throws Exception {
+        doTestBug57621(false);
+    }
+
+
+    private void doTestBug57621(boolean delayAsyncThread) throws Exception {
         Tomcat tomcat = getTomcatInstance();
         Context root = tomcat.addContext("", null);
-        Wrapper w = Tomcat.addServlet(root, "Bug57621", new Bug57621Servlet());
+        Wrapper w = Tomcat.addServlet(root, "Bug57621", new Bug57621Servlet(delayAsyncThread));
         w.setAsyncSupported(true);
         root.addServletMapping("/test", "Bug57621");
 
@@ -744,13 +762,30 @@ public class TestHttp11Processor extends TomcatBaseTest {
 
         private static final long serialVersionUID = 1L;
 
+        private final boolean delayAsyncThread;
+
+
+        public Bug57621Servlet(boolean delayAsyncThread) {
+            this.delayAsyncThread = delayAsyncThread;
+        }
+
+
         @Override
-        protected void doPut(HttpServletRequest req, HttpServletResponse resp)
+        protected void doPut(HttpServletRequest req, final HttpServletResponse resp)
                 throws ServletException, IOException {
-            AsyncContext ac = req.startAsync();
+            final AsyncContext ac = req.startAsync();
             ac.start(new Runnable() {
                 @Override
                 public void run() {
+                    if (delayAsyncThread) {
+                        // Makes the difference between calling complete before
+                        // the request body is received of after.
+                        try {
+                            Thread.sleep(1500);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                    }
                     resp.setContentType("text/plain");
                     resp.setCharacterEncoding("UTF-8");
                     try {
@@ -765,7 +800,7 @@ public class TestHttp11Processor extends TomcatBaseTest {
     }
 
 
-    private class Bug57621Client extends SimpleHttpClient {
+    private static class Bug57621Client extends SimpleHttpClient {
 
         private Exception doRequest() {
             try {
@@ -799,6 +834,142 @@ public class TestHttp11Processor extends TomcatBaseTest {
                 return false;
             }
             return true;
+        }
+    }
+
+
+    @Test
+    public void testBug59310() throws Exception {
+        Tomcat tomcat = getTomcatInstance();
+
+        // No file system docBase required
+        Context ctx = tomcat.addContext("", null);
+
+        Tomcat.addServlet(ctx, "Bug59310", new Bug59310Servlet());
+        ctx.addServletMapping("/test", "Bug59310");
+
+        tomcat.start();
+
+        ByteChunk responseBody = new ByteChunk();
+        Map<String,List<String>> responseHeaders = new HashMap<>();
+
+        int rc = headUrl("http://localhost:" + getPort() + "/test", responseBody,
+                responseHeaders);
+
+        assertEquals(HttpServletResponse.SC_OK, rc);
+        assertEquals(0, responseBody.getLength());
+        assertFalse(responseHeaders.containsKey("Content-Length"));
+    }
+
+
+    private static class Bug59310Servlet extends HttpServlet {
+
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        protected void doGet(HttpServletRequest req, HttpServletResponse resp)
+                throws ServletException, IOException {
+            super.doGet(req, resp);
+        }
+
+        @Override
+        protected void doHead(HttpServletRequest req, HttpServletResponse resp)
+                throws ServletException, IOException {
+        }
+    }
+
+
+    /*
+     * Tests what happens if a request is completed during a dispatch but the
+     * request body has not been fully read.
+     */
+    @Test
+    public void testRequestBodySwallowing() throws Exception {
+        Tomcat tomcat = getTomcatInstance();
+
+        // No file system docBase required
+        Context ctx = tomcat.addContext("", null);
+
+        DispatchingServlet servlet = new DispatchingServlet();
+        Wrapper w = Tomcat.addServlet(ctx, "Test", servlet);
+        w.setAsyncSupported(true);
+        ctx.addServletMapping("/test", "Test");
+
+        tomcat.start();
+
+        // Hand-craft the client so we have complete control over the timing
+        SocketAddress addr = new InetSocketAddress("localhost", getPort());
+        Socket socket = new Socket();
+        socket.setSoTimeout(300000);
+        socket.connect(addr,300000);
+        OutputStream os = socket.getOutputStream();
+        Writer writer = new OutputStreamWriter(os, "ISO-8859-1");
+        InputStream is = socket.getInputStream();
+        Reader r = new InputStreamReader(is, "ISO-8859-1");
+        BufferedReader reader = new BufferedReader(r);
+
+        // Write the headers
+        writer.write("POST /test HTTP/1.1\r\n");
+        writer.write("Host: localhost:8080\r\n");
+        writer.write("Transfer-Encoding: chunked\r\n");
+        writer.write("\r\n");
+        writer.flush();
+
+        validateResponse(reader);
+
+        // Write the request body
+        writer.write("2\r\n");
+        writer.write("AB\r\n");
+        writer.write("0\r\n");
+        writer.write("\r\n");
+        writer.flush();
+
+        // Write the 2nd request
+        writer.write("POST /test HTTP/1.1\r\n");
+        writer.write("Host: localhost:8080\r\n");
+        writer.write("Transfer-Encoding: chunked\r\n");
+        writer.write("\r\n");
+        writer.flush();
+
+        // Read the 2nd response
+        validateResponse(reader);
+
+        // Write the 2nd request body
+        writer.write("2\r\n");
+        writer.write("AB\r\n");
+        writer.write("0\r\n");
+        writer.write("\r\n");
+        writer.flush();
+
+        // Done
+        socket.close();
+    }
+
+
+    private void validateResponse(BufferedReader reader) throws IOException {
+        // First line has the response code and should always be 200
+        String line = reader.readLine();
+        Assert.assertEquals("HTTP/1.1 200 ", line);
+        while (!"OK".equals(line)) {
+            line = reader.readLine();
+        }
+    }
+
+
+    private static class DispatchingServlet extends HttpServlet {
+
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        protected void doPost(HttpServletRequest req, HttpServletResponse resp)
+                throws ServletException, IOException {
+            if (DispatcherType.ASYNC.equals(req.getDispatcherType())) {
+                resp.setContentType("text/plain");
+                resp.setCharacterEncoding("UTF-8");
+                resp.getWriter().write("OK\n");
+            } else {
+                req.startAsync().dispatch();
+            }
         }
     }
 }

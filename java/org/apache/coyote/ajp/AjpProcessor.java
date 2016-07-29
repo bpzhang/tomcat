@@ -432,10 +432,6 @@ public class AjpProcessor extends AbstractProcessor {
             setErrorState(ErrorState.CLOSE_CLEAN, null);
             break;
         }
-        case END_REQUEST: {
-            // NO-OP for AJP
-            break;
-        }
 
         // Request attribute support
         case REQ_HOST_ADDR_ATTRIBUTE: {
@@ -596,6 +592,10 @@ public class AjpProcessor extends AbstractProcessor {
             result.set(asyncStateMachine.asyncTimeout());
             break;
         }
+        case ASYNC_POST_PROCESS: {
+            asyncStateMachine.asyncPostProcess();
+            break;
+        }
 
         // Servlet 3.1 non-blocking I/O
         case REQUEST_BODY_FULLY_READ: {
@@ -636,6 +636,12 @@ public class AjpProcessor extends AbstractProcessor {
         }
 
         // Servlet 4.0 Push requests
+        case IS_PUSH_SUPPORTED: {
+            // HTTP2 connections only. Unsupported for AJP.
+            AtomicBoolean result = (AtomicBoolean) param;
+            result.set(false);
+            break;
+        }
         case PUSH_REQUEST: {
             // HTTP2 connections only. Unsupported for AJP.
             throw new UnsupportedOperationException(
@@ -674,6 +680,7 @@ public class AjpProcessor extends AbstractProcessor {
         if (keepAliveTimeout > 0) {
             socketWrapper.setReadTimeout(keepAliveTimeout);
         }
+        recycle();
         return SocketState.OPEN;
     }
 
@@ -1296,13 +1303,6 @@ public class AjpProcessor extends AbstractProcessor {
         }
 
         if (colonPos < 0) {
-            if (request.scheme().equalsIgnoreCase("https")) {
-                // 443 - Default HTTPS port
-                request.setServerPort(443);
-            } else {
-                // 80 - Default HTTTP port
-                request.setServerPort(80);
-            }
             request.serverName().setChars(hostNameC, 0, valueL);
         } else {
 

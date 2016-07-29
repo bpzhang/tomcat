@@ -16,23 +16,23 @@
  */
 package org.apache.tomcat.util.net.jsse;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.KeyManagementException;
 import java.security.KeyStore;
 import java.security.NoSuchAlgorithmException;
-import java.security.UnrecoverableKeyException;
 import java.security.cert.CRL;
 import java.security.cert.CRLException;
 import java.security.cert.CertPathParameters;
 import java.security.cert.CertStore;
 import java.security.cert.CertStoreParameters;
+import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.CollectionCertStoreParameters;
 import java.security.cert.PKIXBuilderParameters;
 import java.security.cert.X509CertSelector;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
@@ -148,92 +148,6 @@ public class JSSEUtil extends SSLUtilBase {
     }
 
 
-    /*
-     * Gets the SSL server's truststore.
-     */
-    protected KeyStore getTrustStore() throws IOException {
-        KeyStore trustStore = null;
-
-        String truststoreFile = sslHostConfig.getTruststoreFile();
-        String truststoreType = sslHostConfig.getTruststoreType();
-        String truststoreProvider = sslHostConfig.getTruststoreProvider();
-
-        if (truststoreFile != null){
-            try {
-                trustStore = getStore(truststoreType, truststoreProvider,
-                        truststoreFile, sslHostConfig.getTruststorePassword());
-            } catch (IOException ioe) {
-                Throwable cause = ioe.getCause();
-                if (cause instanceof UnrecoverableKeyException) {
-                    // Log a warning we had a password issue
-                    log.warn(sm.getString("jsse.invalid_truststore_password"),
-                            cause);
-                    // Re-try
-                    trustStore = getStore(truststoreType, truststoreProvider,
-                            truststoreFile, null);
-                } else {
-                    // Something else went wrong - re-throw
-                    throw ioe;
-                }
-            }
-        }
-
-        return trustStore;
-    }
-
-
-    /*
-     * Gets the key- or truststore with the specified type, path, and password.
-     */
-    private KeyStore getStore(String type, String provider, String path,
-            String pass) throws IOException {
-
-        KeyStore ks = null;
-        InputStream istream = null;
-        try {
-            if (provider == null) {
-                ks = KeyStore.getInstance(type);
-            } else {
-                ks = KeyStore.getInstance(type, provider);
-            }
-            if(!("PKCS11".equalsIgnoreCase(type) ||
-                    "".equalsIgnoreCase(path)) ||
-                    "NONE".equalsIgnoreCase(path)) {
-                istream = ConfigFileLoader.getInputStream(path);
-            }
-
-            char[] storePass = null;
-            if (pass != null && !"".equals(pass)) {
-                storePass = pass.toCharArray();
-            }
-            ks.load(istream, storePass);
-        } catch (FileNotFoundException fnfe) {
-            log.error(sm.getString("jsse.keystore_load_failed", type, path,
-                    fnfe.getMessage()), fnfe);
-            throw fnfe;
-        } catch (IOException ioe) {
-            // May be expected when working with a trust store
-            // Re-throw. Caller will catch and log as required
-            throw ioe;
-        } catch(Exception ex) {
-            String msg = sm.getString("jsse.keystore_load_failed", type, path,
-                    ex.getMessage());
-            log.error(msg, ex);
-            throw new IOException(msg);
-        } finally {
-            if (istream != null) {
-                try {
-                    istream.close();
-                } catch (IOException ioe) {
-                    // Do nothing
-                }
-            }
-        }
-
-        return ks;
-    }
-
-
     @Override
     protected Log getLog() {
         return log;
@@ -261,9 +175,6 @@ public class JSSEUtil extends SSLUtilBase {
     @Override
     public KeyManager[] getKeyManagers() throws Exception {
         String keystoreType = certificate.getCertificateKeystoreType();
-        String keystoreProvider = certificate.getCertificateKeystoreProvider();
-        String keystoreFile = certificate.getCertificateKeystoreFile();
-        String keystorePass = certificate.getCertificateKeystorePassword();
         String keyAlias = certificate.getCertificateKeyAlias();
         String algorithm = sslHostConfig.getKeyManagerAlgorithm();
         String keyPass = certificate.getCertificateKeyPassword();
@@ -275,7 +186,29 @@ public class JSSEUtil extends SSLUtilBase {
 
         KeyManager[] kms = null;
 
-        KeyStore ks = getStore(keystoreType, keystoreProvider, keystoreFile, keystorePass);
+        KeyStore ks = certificate.getCertificateKeystore();
+
+        if (ks == null) {
+            // create an in-memory keystore and import the private key
+            // and the certificate chain from the PEM files
+            ks = KeyStore.getInstance("JKS");
+            ks.load(null, null);
+
+            PEMFile privateKeyFile = new PEMFile(SSLHostConfig.adjustRelativePath
+                    (certificate.getCertificateKeyFile() != null ? certificate.getCertificateKeyFile() : certificate.getCertificateFile()),
+                    keyPass);
+            PEMFile certificateFile = new PEMFile(SSLHostConfig.adjustRelativePath(certificate.getCertificateFile()));
+
+            Collection<Certificate> chain = new ArrayList<>();
+            chain.addAll(certificateFile.getCertificates());
+            if (certificate.getCertificateChainFile() != null) {
+                PEMFile certificateChainFile = new PEMFile(SSLHostConfig.adjustRelativePath(certificate.getCertificateChainFile()));
+                chain.addAll(certificateChainFile.getCertificates());
+            }
+
+            ks.setKeyEntry(keyAlias, privateKeyFile.getPrivateKey(), keyPass.toCharArray(), chain.toArray(new Certificate[chain.size()]));
+        }
+
         if (keyAlias != null && !ks.isKeyEntry(keyAlias)) {
             throw new IOException(sm.getString("jsse.alias_no_key_entry", keyAlias));
         }
@@ -324,7 +257,7 @@ public class JSSEUtil extends SSLUtilBase {
 
         TrustManager[] tms = null;
 
-        KeyStore trustStore = getTrustStore();
+        KeyStore trustStore = sslHostConfig.getTruststore();
         if (trustStore != null || className != null) {
             if (crlf == null) {
                 TrustManagerFactory tmf = TrustManagerFactory.getInstance(algorithm);

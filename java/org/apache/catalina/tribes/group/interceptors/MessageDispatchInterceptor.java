@@ -93,8 +93,8 @@ public class MessageDispatchInterceptor extends ChannelInterceptorBase {
     }
 
 
-    public boolean addToQueue(ChannelMessage msg, Member[] destination,
-            InterceptorPayload payload) {
+    public boolean addToQueue(final ChannelMessage msg, final Member[] destination,
+            final InterceptorPayload payload) {
         Runnable r = new Runnable() {
             @Override
             public void run() {
@@ -110,9 +110,11 @@ public class MessageDispatchInterceptor extends ChannelInterceptorBase {
         if (run) {
             return;
         }
+        String channelName = "";
+        if (getChannel().getName() != null) channelName = "[" + getChannel().getName() + "]";
         executor = ExecutorFactory.newThreadPool(maxSpareThreads, maxThreads, keepAliveTime,
                 TimeUnit.MILLISECONDS,
-                new TcclThreadFactory("MessageDispatchInterceptor.MessageDispatchThread"));
+                new TcclThreadFactory("MessageDispatchInterceptor.MessageDispatchThread" + channelName));
         run = true;
     }
 

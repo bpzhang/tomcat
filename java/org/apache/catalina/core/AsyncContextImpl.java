@@ -17,7 +17,6 @@
 package org.apache.catalina.core;
 
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -97,29 +96,6 @@ public class AsyncContextImpl implements AsyncContext, AsyncContextCallback {
 
     @Override
     public void fireOnComplete() {
-        // Fire the listeners
-        doFireOnComplete();
-
-        // The application doesn't know it has to stop read and/or writing until
-        // it receives the complete event so the request and response have to be
-        // closed after firing the event.
-        try {
-            // First of all ensure that any data written to the response is
-            // written to the I/O layer.
-            request.getResponse().finishResponse();
-            // Close the request and the response.
-            request.getCoyoteRequest().action(ActionCode.END_REQUEST, null);
-        } catch (Throwable t) {
-            ExceptionUtils.handleThrowable(t);
-            // Catch this here and allow async context complete to continue
-            // normally so a dispatch takes place which ensures that  the
-            // request and response objects are correctly recycled.
-            log.debug(sm.getString("asyncContextImpl.finishResponseError"), t);
-        }
-    }
-
-
-    private void doFireOnComplete() {
         List<AsyncListenerWrapper> listenersCopy = new ArrayList<>();
         listenersCopy.addAll(listeners);
 
@@ -191,7 +167,7 @@ public class AsyncContextImpl implements AsyncContext, AsyncContextCallback {
     @Override
     public void dispatch(String path) {
         check();
-        dispatch(request.getServletContext(),path);
+        dispatch(getRequest().getServletContext(), path);
     }
 
     @Override
@@ -272,6 +248,8 @@ public class AsyncContextImpl implements AsyncContext, AsyncContextCallback {
         check();
         AsyncListenerWrapper wrapper = new AsyncListenerWrapper();
         wrapper.setListener(listener);
+        wrapper.setServletRequest(servletRequest);
+        wrapper.setServletResponse(servletResponse);
         listeners.add(wrapper);
     }
 
@@ -284,20 +262,8 @@ public class AsyncContextImpl implements AsyncContext, AsyncContextCallback {
         try {
              listener = (T) getInstanceManager().newInstance(clazz.getName(),
                      clazz.getClassLoader());
-        } catch (InstantiationException e) {
-            ServletException se = new ServletException(e);
-            throw se;
-        } catch (IllegalAccessException e) {
-            ServletException se = new ServletException(e);
-            throw se;
-        } catch (InvocationTargetException e) {
-            ExceptionUtils.handleThrowable(e.getCause());
-            ServletException se = new ServletException(e);
-            throw se;
-        } catch (NamingException e) {
-            ServletException se = new ServletException(e);
-            throw se;
-        } catch (ClassNotFoundException e) {
+        } catch (InstantiationException | IllegalAccessException | NamingException |
+                ClassNotFoundException e) {
             ServletException se = new ServletException(e);
             throw se;
         } catch (Exception e) {
@@ -378,9 +344,7 @@ public class AsyncContextImpl implements AsyncContext, AsyncContextCallback {
             dispatch = null;
             runnable.run();
             if (!request.isAsync()) {
-                // Uses internal method since we don't want the request/response
-                // to be closed. That will be handled in the adapter.
-                doFireOnComplete();
+                fireOnComplete();
             }
         } catch (RuntimeException x) {
             // doInternalComplete(true);

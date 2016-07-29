@@ -44,12 +44,12 @@ import javax.servlet.jsp.tagext.ValidationMessage;
 
 import org.apache.jasper.JasperException;
 import org.apache.jasper.JspCompilationContext;
+import org.apache.tomcat.Jar;
 import org.apache.tomcat.util.descriptor.tld.TagFileXml;
 import org.apache.tomcat.util.descriptor.tld.TagXml;
 import org.apache.tomcat.util.descriptor.tld.TaglibXml;
 import org.apache.tomcat.util.descriptor.tld.TldResourcePath;
 import org.apache.tomcat.util.descriptor.tld.ValidatorXml;
-import org.apache.tomcat.util.scan.Jar;
 
 /**
  * Implementation of the TagLibraryInfo class from the JSP spec.
@@ -172,11 +172,21 @@ class TagLibraryInfoImpl extends TagLibraryInfo implements TagConstants {
             }
 
             // Get the representation of the TLD
+            if (tldResourcePath.getUrl() == null) {
+                err.jspError("jsp.error.tld.missing", prefix, uri);
+            }
             TaglibXml taglibXml =
                     ctxt.getOptions().getTldCache().getTaglibXml(tldResourcePath);
+            if (taglibXml == null) {
+                err.jspError("jsp.error.tld.missing", prefix, uri);
+            }
 
             // Populate the TagLibraryInfo attributes
-            this.jspversion = taglibXml.getJspVersion();
+            // Never null. jspError always throws an Exception
+            // Slightly convoluted so the @SuppressWarnings has minimal scope
+            @SuppressWarnings("null")
+            String v = taglibXml.getJspVersion();
+            this.jspversion = v;
             this.tlibversion = taglibXml.getTlibVersion();
             this.shortname = taglibXml.getShortName();
             this.urn = taglibXml.getUri();
@@ -266,9 +276,11 @@ class TagLibraryInfoImpl extends TagLibraryInfo implements TagConstants {
                 err.jspError("jsp.error.tld.missing_jar", uri);
             }
             return new TldResourcePath(url, uri, "META-INF/taglib.tld");
-        } else {
-            return new TldResourcePath(url, uri);
+        } else if (uri.startsWith("/WEB-INF/lib/") || uri.startsWith("/WEB-INF/classes/") ||
+                (uri.startsWith("/WEB-INF/tags/") && uri.endsWith(".tld")&& !uri.endsWith("implicit.tld"))) {
+            err.jspError("jsp.error.tld.invalid_tld_file", uri);
         }
+        return new TldResourcePath(url, uri);
     }
 
     private TagInfo createTagInfo(TagXml tagXml) throws JasperException {

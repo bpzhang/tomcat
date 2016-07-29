@@ -189,6 +189,12 @@ public enum ActionCode {
     ASYNC_IS_ERROR,
 
     /**
+     * Callback to trigger post processing. Typically only used during error
+     * handling to trigger essential processing that otherwise would be skipped.
+     */
+    ASYNC_POST_PROCESS,
+
+    /**
      * Callback to trigger the HTTP upgrade process.
      */
     UPGRADE,
@@ -233,10 +239,9 @@ public enum ActionCode {
     DISPATCH_EXECUTE,
 
     /**
-     * Trigger end of request processing (remaining input swallowed, write any
-     * remaining parts of the response etc.).
+     * Is server push supported and allowed for the current request?
      */
-    END_REQUEST,
+    IS_PUSH_SUPPORTED,
 
     /**
      * Push a request on behalf of the client of the current request.
