@@ -41,6 +41,7 @@ import org.apache.catalina.Globals;
 import org.apache.catalina.Manager;
 import org.apache.catalina.Session;
 import org.apache.catalina.util.ParameterMap;
+import org.apache.catalina.util.RequestUtil;
 import org.apache.tomcat.util.buf.B2CConverter;
 import org.apache.tomcat.util.buf.MessageBytes;
 import org.apache.tomcat.util.http.Parameters;
@@ -83,6 +84,8 @@ class ApplicationHttpRequest extends HttpServletRequestWrapper {
       RequestDispatcher.FORWARD_PATH_INFO,
       RequestDispatcher.FORWARD_QUERY_STRING,
       RequestDispatcher.FORWARD_MAPPING};
+
+    private static final int SPECIALS_FIRST_FORWARD_INDEX = 6;
 
 
     // ----------------------------------------------------------- Constructors
@@ -235,8 +238,9 @@ class ApplicationHttpRequest extends HttpServletRequestWrapper {
         if (pos == -1) {
             return getRequest().getAttribute(name);
         } else {
-            if ((specialAttributes[pos] == null)
-                && (specialAttributes[5] == null) && (pos >= 5)) {
+            if ((specialAttributes[pos] == null) &&
+                    (specialAttributes[SPECIALS_FIRST_FORWARD_INDEX] == null) &&
+                    (pos >= SPECIALS_FIRST_FORWARD_INDEX)) {
                 // If it's a forward special attribute, and null, it means this
                 // is an include, so we check the wrapped request since
                 // the request could have been forwarded before the include
@@ -485,25 +489,7 @@ class ApplicationHttpRequest extends HttpServletRequestWrapper {
      */
     @Override
     public StringBuffer getRequestURL() {
-
-        StringBuffer url = new StringBuffer();
-        String scheme = getScheme();
-        int port = getServerPort();
-        if (port < 0)
-            port = 80; // Work around java.net.URL bug
-
-        url.append(scheme);
-        url.append("://");
-        url.append(getServerName());
-        if ((scheme.equals("http") && (port != 80))
-            || (scheme.equals("https") && (port != 443))) {
-            url.append(':');
-            url.append(port);
-        }
-        url.append(getRequestURI());
-
-        return (url);
-
+        return RequestUtil.getRequestURL(this);
     }
 
 

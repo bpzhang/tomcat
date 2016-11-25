@@ -14,30 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package javax.servlet.http;
-
-import java.util.BitSet;
-
-import org.junit.Test;
+package org.apache.tomcat.util.digester;
 
 /**
- * Basic tests for Cookie in default configuration.
+ *
+ * A collection of interfaces, one per property, that enables the object being
+ * populated by the digester to signal to the digester that it supports the
+ * given property and that the digester should populate that property if
+ * available.
  */
-public class TestCookieNetscapeValidator {
+public interface DocumentProperties {
 
-    private NetscapeValidator validator = new NetscapeValidator();
-
-    @Test
-    public void actualCharactersAllowedInName() {
-        // "any character except comma, semicolon and whitespace"
-        // also disallow '=' as that is interpreted as a delimiter by browsers
-        BitSet allowed = new BitSet(256);
-        allowed.or(TestCookie.CHAR);
-        allowed.andNot(TestCookie.CTL);
-        allowed.clear(';');
-        allowed.clear(',');
-        allowed.clear(' ');
-        allowed.clear('=');
-        TestCookie.checkCharInName(validator, allowed);
+    /**
+     * The encoding used by the source XMl document.
+     */
+    public interface Encoding {
+        public void setEncoding(String encoding);
     }
 }

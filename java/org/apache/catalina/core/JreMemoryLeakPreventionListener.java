@@ -36,6 +36,7 @@ import org.apache.catalina.LifecycleListener;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.ExceptionUtils;
+import org.apache.tomcat.util.compat.JreCompat;
 import org.apache.tomcat.util.compat.JreVendor;
 import org.apache.tomcat.util.res.StringManager;
 import org.w3c.dom.Document;
@@ -80,6 +81,8 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
      * application. This first call will start a GC Daemon thread with the
      * thread's context class loader configured to be the web application class
      * loader. Defaults to <code>true</code>.
+     *
+     * @see "http://bugs.java.com/bugdatabase/view_bug.do?bug_id=JDK-8157570"
      */
     private boolean gcDaemonProtection = true;
     public boolean isGcDaemonProtection() { return gcDaemonProtection; }
@@ -134,6 +137,8 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
      * That thread inherits the context class loader of the current thread, so
      * that there may be a web application class loader leak if the web app
      * is the first to use <code>LdapPoolManager</code>.
+     *
+     * @see "http://bugs.java.com/bugdatabase/view_bug.do?bug_id=JDK-8156824"
      */
     private boolean ldapPoolProtection = true;
     public boolean isLdapPoolProtection() { return ldapPoolProtection; }
@@ -195,7 +200,7 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
                 // Trigger the creation of the AWT (AWT-Windows, AWT-XAWT,
                 // etc.) thread.
                 // Note this issue is fixed in Java 8 update 05 onwards.
-                if (awtThreadProtection) {
+                if (awtThreadProtection && !JreCompat.isJre9Available()) {
                     java.awt.Toolkit.getDefaultToolkit();
                 }
 
@@ -211,8 +216,9 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
                  * Note: Long.MAX_VALUE is a special case that causes the thread
                  *       to terminate
                  *
+                 * Fixed in Java 9 onwards (from early access build 130)
                  */
-                if (gcDaemonProtection) {
+                if (gcDaemonProtection && !JreCompat.isJre9Available()) {
                     try {
                         Class<?> clazz = Class.forName("sun.misc.GC");
                         Method method = clazz.getDeclaredMethod(
@@ -245,8 +251,10 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
                  * to the web application class loader.
                  *
                  * Instead we initialize JCA right now.
+                 *
+                 * Fixed in Java 9 onwards (from early access build 133)
                  */
-                if (tokenPollerProtection) {
+                if (tokenPollerProtection && !JreCompat.isJre9Available()) {
                     java.security.Security.getProviders();
                 }
 
@@ -260,6 +268,8 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
                  * include:
                  * - log4j versions 1.2.15 and earlier
                  * - javax.xml.bind.JAXBContext.newInstance()
+                 *
+                 * https://bugs.openjdk.java.net/browse/JDK-8163449
                  */
 
                 // Set the default URL caching policy to not to cache
@@ -279,13 +289,17 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
                     }
                 }
 
-                if (xmlParsingProtection) {
+                /*
+                 * Fixed in Java 9 onwards (from early access build 133)
+                 */
+                if (xmlParsingProtection && !JreCompat.isJre9Available()) {
                     // There are two known issues with XML parsing that affect
                     // Java 8+. The issues both relate to cached Exception
                     // instances that retain a link to the TCCL via the
                     // backtrace field. Note that YourKit only shows this field
                     // when using the HPROF format memory snapshots.
                     // https://bz.apache.org/bugzilla/show_bug.cgi?id=58486
+                    // https://bugs.openjdk.java.net/browse/JDK-8146961
                     DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
                     try {
                         DocumentBuilder documentBuilder = factory.newDocumentBuilder();
@@ -305,7 +319,10 @@ public class JreMemoryLeakPreventionListener implements LifecycleListener {
                     }
                 }
 
-                if (ldapPoolProtection) {
+                /*
+                 * Fixed in Java 9 onwards (from early access build 130)
+                 */
+                if (ldapPoolProtection && !JreCompat.isJre9Available()) {
                     try {
                         Class.forName("com.sun.jndi.ldap.LdapPoolManager");
                     } catch (ClassNotFoundException e) {

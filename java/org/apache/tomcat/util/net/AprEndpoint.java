@@ -312,7 +312,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
             throw new Exception(sm.getString("endpoint.init.bind", "" + ret, Error.strerror(ret)));
         }
         // Start listening on the server socket
-        ret = Socket.listen(serverSock, getBacklog());
+        ret = Socket.listen(serverSock, getAcceptCount());
         if (ret != 0) {
             throw new Exception(sm.getString("endpoint.init.listen", "" + ret, Error.strerror(ret)));
         }
@@ -536,6 +536,16 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
         }
         // Default
         return 0;
+    }
+
+
+
+    @Override
+    public boolean isAlpnSupported() {
+        // The APR/native connector always supports ALPN if TLS is in use
+        // because OpenSSL supports ALPN. Therefore, this is equivalent to
+        // testing of SSL is enabled.
+        return isSSLEnabled();
     }
 
 
@@ -795,8 +805,8 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                 AprSocketWrapper wrapper = new AprSocketWrapper(Long.valueOf(socket), this);
                 wrapper.setKeepAliveLeft(getMaxKeepAliveRequests());
                 wrapper.setSecure(isSSLEnabled());
-                wrapper.setReadTimeout(getSoTimeout());
-                wrapper.setWriteTimeout(getSoTimeout());
+                wrapper.setReadTimeout(getConnectionTimeout());
+                wrapper.setWriteTimeout(getConnectionTimeout());
                 connections.put(Long.valueOf(socket), wrapper);
                 getExecutor().execute(new SocketWithOptionsProcessor(wrapper));
             }
@@ -1522,7 +1532,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                 while (pollerRunning && connectionCount.get() < 1 &&
                         addList.size() < 1 && closeList.size() < 1) {
                     try {
-                        if (getSoTimeout() > 0 && pollerRunning) {
+                        if (getConnectionTimeout() > 0 && pollerRunning) {
                             maintain();
                         }
                         synchronized (this) {
@@ -1789,7 +1799,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                 }
                 try {
                     // Process socket timeouts
-                    if (getSoTimeout() > 0 && pollerRunning) {
+                    if (getConnectionTimeout() > 0 && pollerRunning) {
                         // This works and uses only one timeout mechanism for everything, but the
                         // non event poller might be a bit faster by using the old maintain.
                         maintain();
@@ -1883,14 +1893,14 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
             if (size <= 0) {
                 size = (OS.IS_WIN32 || OS.IS_WIN64) ? (1 * 1024) : (16 * 1024);
             }
-            sendfilePollset = allocatePoller(size, pool, getSoTimeout());
+            sendfilePollset = allocatePoller(size, pool, getConnectionTimeout());
             if (sendfilePollset == 0 && size > 1024) {
                 size = 1024;
-                sendfilePollset = allocatePoller(size, pool, getSoTimeout());
+                sendfilePollset = allocatePoller(size, pool, getConnectionTimeout());
             }
             if (sendfilePollset == 0) {
                 size = 62;
-                sendfilePollset = allocatePoller(size, pool, getSoTimeout());
+                sendfilePollset = allocatePoller(size, pool, getConnectionTimeout());
             }
             desc = new long[size * 2];
             sendfileData = new HashMap<>(size);
@@ -1968,7 +1978,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                             // Entire file has been sent
                             Pool.destroy(data.fdpool);
                             // Set back socket to blocking mode
-                            Socket.timeoutSet(data.socket, getSoTimeout() * 1000);
+                            Socket.timeoutSet(data.socket, getConnectionTimeout() * 1000);
                             return SendfileState.DONE;
                         }
                     }
@@ -2098,7 +2108,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                                     // Destroy file descriptor pool, which should close the file
                                     Pool.destroy(state.fdpool);
                                     Socket.timeoutSet(state.socket,
-                                            getSoTimeout() * 1000);
+                                            getConnectionTimeout() * 1000);
                                     // If all done put the socket back in the
                                     // poller for processing of further requests
                                     getPoller().add(
@@ -2131,7 +2141,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                         }
                     }
                     // Call maintain for the sendfile poller
-                    if (getSoTimeout() > 0 &&
+                    if (getConnectionTimeout() > 0 &&
                             maintainTime > 1000000L && sendfileRunning) {
                         rv = Poll.maintain(sendfilePollset, desc, false);
                         maintainTime = 0;
@@ -2187,7 +2197,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                 if (!deferAccept) {
                     if (setSocketOptions(socket)) {
                         getPoller().add(socket.getSocket().longValue(),
-                                getSoTimeout(), Poll.APR_POLLIN);
+                                getConnectionTimeout(), Poll.APR_POLLIN);
                     } else {
                         // Close socket and pool
                         closeSocket(socket.getSocket().longValue());
@@ -2279,23 +2289,10 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
 
 
         @Override
-        public int read(boolean block, byte[] b, int off, int len)
-                throws IOException {
-
-            socketBufferHandler.configureReadBufferForRead();
-            ByteBuffer readBuffer = socketBufferHandler.getReadBuffer();
-            int remaining = readBuffer.remaining();
-
-            // Is there enough data in the read buffer to satisfy this request?
-            if (remaining >= len) {
-                readBuffer.get(b, off, len);
-                return len;
-            }
-
-            // Copy what data there is in the read buffer to the byte array
-            if (remaining > 0) {
-                readBuffer.get(b, off, remaining);
-                return remaining;
+        public int read(boolean block, byte[] b, int off, int len) throws IOException {
+            int nRead = populateReadBuffer(b, off, len);
+            if (nRead > 0) {
+                return nRead;
                 /*
                  * Since more bytes may have arrived since the buffer was last
                  * filled, it is an option at this point to perform a
@@ -2306,32 +2303,62 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
             }
 
             // Fill the read buffer as best we can.
-            int nRead = fillReadBuffer(block);
+            nRead = fillReadBuffer(block);
 
-            // Full as much of the remaining byte array as possible with the
+            // Fill as much of the remaining byte array as possible with the
             // data that was just read
             if (nRead > 0) {
                 socketBufferHandler.configureReadBufferForRead();
-                if (nRead > len) {
-                    readBuffer.get(b, off, len);
-                    return len;
-                } else {
-                    readBuffer.get(b, off, nRead);
-                    return nRead;
-                }
-            } else {
-                return nRead;
+                nRead = Math.min(nRead, len);
+                socketBufferHandler.getReadBuffer().get(b, off, nRead);
             }
+            return nRead;
+        }
+
+
+        @Override
+        public int read(boolean block, ByteBuffer to) throws IOException {
+            int nRead = populateReadBuffer(to);
+            if (nRead > 0) {
+                return nRead;
+                /*
+                 * Since more bytes may have arrived since the buffer was last
+                 * filled, it is an option at this point to perform a
+                 * non-blocking read. However correctly handling the case if
+                 * that read returns end of stream adds complexity. Therefore,
+                 * at the moment, the preference is for simplicity.
+                 */
+            }
+
+            // The socket read buffer capacity is socket.appReadBufSize
+            int limit = socketBufferHandler.getReadBuffer().capacity();
+            if (to.isDirect() && to.remaining() >= limit) {
+                to.limit(to.position() + limit);
+                nRead = fillReadBuffer(block, to);
+            } else {
+                // Fill the read buffer as best we can.
+                nRead = fillReadBuffer(block);
+
+                // Fill as much of the remaining byte array as possible with the
+                // data that was just read
+                if (nRead > 0) {
+                    nRead = populateReadBuffer(to);
+                }
+            }
+            return nRead;
         }
 
 
         private int fillReadBuffer(boolean block) throws IOException {
+            socketBufferHandler.configureReadBufferForWrite();
+            return fillReadBuffer(block, socketBufferHandler.getReadBuffer());
+        }
+
+
+        private int fillReadBuffer(boolean block, ByteBuffer to) throws IOException {
             if (closed) {
                 throw new IOException(sm.getString("socket.apr.closed", getSocket()));
             }
-
-            socketBufferHandler.configureReadBufferForWrite();
-            ByteBuffer socketReadBuffer = socketBufferHandler.getReadBuffer();
 
             Lock readLock = getBlockingStatusReadLock();
             WriteLock writeLock = getBlockingStatusWriteLock();
@@ -2344,8 +2371,8 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                     if (block) {
                         Socket.timeoutSet(getSocket().longValue(), getReadTimeout() * 1000);
                     }
-                    result = Socket.recvb(getSocket().longValue(),
-                            socketReadBuffer, socketReadBuffer.position(), socketReadBuffer.remaining());
+                    result = Socket.recvb(getSocket().longValue(), to, to.position(),
+                            to.remaining());
                     readDone = true;
                 }
             } finally {
@@ -2366,8 +2393,8 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                     readLock.lock();
                     try {
                         writeLock.unlock();
-                        result = Socket.recvb(getSocket().longValue(),
-                                socketReadBuffer, socketReadBuffer.position(), socketReadBuffer.remaining());
+                        result = Socket.recvb(getSocket().longValue(), to, to.position(),
+                                to.remaining());
                     } finally {
                         readLock.unlock();
                     }
@@ -2381,7 +2408,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
             }
 
             if (result > 0) {
-                socketReadBuffer.position(socketReadBuffer.position() + result);
+                to.position(to.position() + result);
                 return result;
             } else if (result == 0 || -result == Status.EAGAIN) {
                 return 0;
@@ -2395,8 +2422,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                 return 0;
             } else if ((-result) == Status.ETIMEDOUT || (-result) == Status.TIMEUP) {
                 if (block) {
-                    throw new SocketTimeoutException(
-                            sm.getString("iib.readtimeout"));
+                    throw new SocketTimeoutException(sm.getString("iib.readtimeout"));
                 } else {
                     // Attempting to read from the socket when the poller
                     // has not signalled that there is data to read appears
@@ -2460,7 +2486,60 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
 
 
         @Override
-        protected void doWrite(boolean block) throws IOException {
+        protected void writeByteBufferBlocking(ByteBuffer from) throws IOException {
+            if (from.isDirect()) {
+                super.writeByteBufferBlocking(from);
+            } else {
+                // The socket write buffer capacity is socket.appWriteBufSize
+                ByteBuffer writeBuffer = socketBufferHandler.getWriteBuffer();
+                int limit = writeBuffer.capacity();
+                while (from.remaining() >= limit) {
+                    socketBufferHandler.configureWriteBufferForWrite();
+                    transfer(from, writeBuffer);
+                    doWrite(true);
+                }
+
+                if (from.remaining() > 0) {
+                    socketBufferHandler.configureWriteBufferForWrite();
+                    transfer(from, writeBuffer);
+                }
+            }
+        }
+
+
+        @Override
+        protected boolean writeByteBufferNonBlocking(ByteBuffer from) throws IOException {
+            if (from.isDirect()) {
+                return super.writeByteBufferNonBlocking(from);
+            } else {
+                // The socket write buffer capacity is socket.appWriteBufSize
+                ByteBuffer writeBuffer = socketBufferHandler.getWriteBuffer();
+                int limit = writeBuffer.capacity();
+                while (from.remaining() >= limit) {
+                    socketBufferHandler.configureWriteBufferForWrite();
+                    transfer(from, writeBuffer);
+                    int newPosition = writeBuffer.position() + limit;
+                    doWrite(false);
+                    if (writeBuffer.position() != newPosition) {
+                        // Didn't write the whole amount of data in the last
+                        // non-blocking write.
+                        // Exit the loop.
+                        return true;
+                    }
+                }
+
+                if (from.remaining() > 0) {
+                    socketBufferHandler.configureWriteBufferForWrite();
+                    transfer(from, writeBuffer);
+                }
+
+                return false;
+            }
+        }
+
+
+        @Override
+        protected void doWrite(boolean block, ByteBuffer from) throws IOException {
             if (closed) {
                 throw new IOException(sm.getString("socket.apr.closed", getSocket()));
             }
@@ -2474,7 +2553,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                     if (block) {
                         Socket.timeoutSet(getSocket().longValue(), getWriteTimeout() * 1000);
                     }
-                    doWriteInternal();
+                    doWriteInternal(from);
                     return;
                 }
             } finally {
@@ -2495,7 +2574,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                 readLock.lock();
                 try {
                     writeLock.unlock();
-                    doWriteInternal();
+                    doWriteInternal(from);
                 } finally {
                     readLock.unlock();
                 }
@@ -2509,18 +2588,16 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
         }
 
 
-        private void doWriteInternal() throws IOException {
+        private void doWriteInternal(ByteBuffer from) throws IOException {
             int thisTime;
 
-            ByteBuffer socketWriteBuffer = socketBufferHandler.getWriteBuffer();
             do {
                 thisTime = 0;
                 if (getEndpoint().isSSLEnabled()) {
                     if (sslOutputBuffer.remaining() == 0) {
                         // Buffer was fully written last time around
                         sslOutputBuffer.clear();
-                        socketBufferHandler.configureWriteBufferForRead();
-                        transfer(socketWriteBuffer, sslOutputBuffer);
+                        transfer(from, sslOutputBuffer);
                         sslOutputBuffer.flip();
                     } else {
                         // Buffer still has data from previous attempt to write
@@ -2533,11 +2610,10 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                         sslOutputBuffer.position(sslOutputBuffer.position() + thisTime);
                     }
                 } else {
-                    socketBufferHandler.configureWriteBufferForRead();
-                    thisTime = Socket.sendb(getSocket().longValue(), socketWriteBuffer,
-                            socketWriteBuffer.position(), socketWriteBuffer.remaining());
+                    thisTime = Socket.sendb(getSocket().longValue(), from, from.position(),
+                            from.remaining());
                     if (thisTime > 0) {
-                        socketWriteBuffer.position(socketWriteBuffer.position() + thisTime);
+                        from.position(from.position() + thisTime);
                     }
                 }
                 if (Status.APR_STATUS_IS_EAGAIN(-thisTime)) {
@@ -2552,7 +2628,7 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
                     throw new IOException(sm.getString("socket.apr.write.error",
                             Integer.valueOf(-thisTime), getSocket(), this));
                 }
-            } while ((thisTime > 0 || getBlockingStatus()) && socketWriteBuffer.hasRemaining());
+            } while ((thisTime > 0 || getBlockingStatus()) && from.hasRemaining());
 
             // If there is data left in the buffer the socket will be registered for
             // write further up the stack. This is to ensure the socket is only
@@ -2713,6 +2789,12 @@ public class AprEndpoint extends AbstractEndpoint<Long> implements SNICallBack {
             // Configure connection to require a certificate
             SSLSocket.setVerify(socket, SSL.SSL_CVERIFY_REQUIRE, -1);
             SSLSocket.renegotiate(socket);
+        }
+
+
+        @Override
+        public void setAppReadBufHandler(ApplicationBufferHandler handler) {
+            // no-op
         }
     }
 }

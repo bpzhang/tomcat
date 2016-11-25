@@ -113,6 +113,9 @@ public abstract class AbstractArchiveResource extends AbstractResource {
 
     @Override
     public long getContentLength() {
+        if (isDirectory()) {
+            return -1;
+        }
         return resource.getSize();
     }
 
@@ -133,7 +136,7 @@ public abstract class AbstractArchiveResource extends AbstractResource {
 
     @Override
     public URL getURL() {
-        String url = baseUrl + "!/" + resource.getName();
+        String url = baseUrl + resource.getName();
         try {
             return new URL(url);
         } catch (MalformedURLException e) {
@@ -165,6 +168,11 @@ public abstract class AbstractArchiveResource extends AbstractResource {
             throw new ArrayIndexOutOfBoundsException(sm.getString(
                     "abstractResource.getContentTooLarge", getWebappPath(),
                     Long.valueOf(len)));
+        }
+
+        if (len < 0) {
+            // Content is not applicable here (e.g. is a directory)
+            return null;
         }
 
         int size = (int) len;
@@ -215,6 +223,9 @@ public abstract class AbstractArchiveResource extends AbstractResource {
 
     @Override
     protected final InputStream doGetInputStream() {
+        if (isDirectory()) {
+            return null;
+        }
         return getJarInputStreamWrapper();
     }
 

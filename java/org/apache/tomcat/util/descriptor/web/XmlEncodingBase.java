@@ -14,36 +14,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.catalina.webresources;
+package org.apache.tomcat.util.descriptor.web;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.URL;
-import java.net.URLConnection;
+/**
+ * Base class for those elements that need to track the encoding used in the
+ * source XML.
+ */
+public abstract class XmlEncodingBase {
+
+    private String encoding = null;
 
 
-public class WarURLConnection extends URLConnection {
-
-    private final URLConnection innerJarUrlConnection;
-    private boolean connected;
-
-    protected WarURLConnection(URL url) throws IOException {
-        super(url);
-        URL innerJarUrl = new URL(url.getFile());
-        innerJarUrlConnection = innerJarUrl.openConnection();
+    public void setEncoding(String encoding) {
+        this.encoding = encoding;
     }
 
-    @Override
-    public void connect() throws IOException {
-        if (!connected) {
-            innerJarUrlConnection.connect();
-            connected = true;
+
+    /**
+     * Obtain the encoding of the XML source that was used to populated this
+     * object.
+     *
+     * @return The encoding of the associated XML source or <code>UTF-8</code>
+     *         if the encoding could not be determined
+     */
+    public String getEncoding() {
+        if (encoding == null || encoding.length() == 0) {
+            return "UTF-8";
         }
-    }
-
-    @Override
-    public InputStream getInputStream() throws IOException {
-        connect();
-        return innerJarUrlConnection.getInputStream();
+        return encoding;
     }
 }

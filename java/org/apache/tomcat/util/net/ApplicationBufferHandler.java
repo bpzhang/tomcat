@@ -14,13 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.tomcat.util.buf;
+package org.apache.tomcat.util.net;
+
+import java.nio.ByteBuffer;
 
 /**
- * String constants for the file package.
+ * Callback interface to be able to expand buffers when buffer overflow
+ * exceptions happen or to replace buffers
  */
-public final class Constants {
+public interface ApplicationBufferHandler {
 
-    public static final String Package = "org.apache.tomcat.util.buf";
+    public void setByteBuffer(ByteBuffer buffer);
+
+    public ByteBuffer getByteBuffer();
+
+    public void expand(int size);
 
 }

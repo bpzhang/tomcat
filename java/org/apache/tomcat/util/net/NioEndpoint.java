@@ -226,7 +226,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
         serverSock = ServerSocketChannel.open();
         socketProperties.setProperties(serverSock.socket());
         InetSocketAddress addr = (getAddress()!=null?new InetSocketAddress(getAddress(),getPort()):new InetSocketAddress(getPort()));
-        serverSock.socket().bind(addr,getBacklog());
+        serverSock.socket().bind(addr,getAcceptCount());
         serverSock.configureBlocking(true); //mimic APR behavior
         serverSock.socket().setSoTimeout(getSocketProperties().getSoTimeout());
 
@@ -710,8 +710,8 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
             ka.setWriteTimeout(getSocketProperties().getSoTimeout());
             ka.setKeepAliveLeft(NioEndpoint.this.getMaxKeepAliveRequests());
             ka.setSecure(isSSLEnabled());
-            ka.setReadTimeout(getSoTimeout());
-            ka.setWriteTimeout(getSoTimeout());
+            ka.setReadTimeout(getConnectionTimeout());
+            ka.setWriteTimeout(getConnectionTimeout());
             PollerEvent r = eventCache.pop();
             ka.interestOps(SelectionKey.OP_READ);//this is what OP_REGISTER turns into.
             if ( r==null) r = new PollerEvent(socket,ka,OP_REGISTER);
@@ -1133,23 +1133,10 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
 
 
         @Override
-        public int read(boolean block, byte[] b, int off, int len)
-                throws IOException {
-
-            socketBufferHandler.configureReadBufferForRead();
-            ByteBuffer readBuffer = socketBufferHandler.getReadBuffer();
-            int remaining = readBuffer.remaining();
-
-            // Is there enough data in the read buffer to satisfy this request?
-            if (remaining >= len) {
-                readBuffer.get(b, off, len);
-                return len;
-            }
-
-            // Copy what data there is in the read buffer to the byte array
-            if (remaining > 0) {
-                readBuffer.get(b, off, remaining);
-                return remaining;
+        public int read(boolean block, byte[] b, int off, int len) throws IOException {
+            int nRead = populateReadBuffer(b, off, len);
+            if (nRead > 0) {
+                return nRead;
                 /*
                  * Since more bytes may have arrived since the buffer was last
                  * filled, it is an option at this point to perform a
@@ -1160,23 +1147,52 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
             }
 
             // Fill the read buffer as best we can.
-            int nRead = fillReadBuffer(block);
-            lastRead = System.currentTimeMillis();
+            nRead = fillReadBuffer(block);
+            updateLastRead();
 
-            // Full as much of the remaining byte array as possible with the
+            // Fill as much of the remaining byte array as possible with the
             // data that was just read
             if (nRead > 0) {
                 socketBufferHandler.configureReadBufferForRead();
-                if (nRead > len) {
-                    readBuffer.get(b, off, len);
-                    return len;
-                } else {
-                    readBuffer.get(b, off, nRead);
-                    return nRead;
-                }
-            } else {
-                return nRead;
+                nRead = Math.min(nRead, len);
+                socketBufferHandler.getReadBuffer().get(b, off, nRead);
             }
+            return nRead;
+        }
+
+
+        @Override
+        public int read(boolean block, ByteBuffer to) throws IOException {
+            int nRead = populateReadBuffer(to);
+            if (nRead > 0) {
+                return nRead;
+                /*
+                 * Since more bytes may have arrived since the buffer was last
+                 * filled, it is an option at this point to perform a
+                 * non-blocking read. However correctly handling the case if
+                 * that read returns end of stream adds complexity. Therefore,
+                 * at the moment, the preference is for simplicity.
+                 */
+            }
+
+            // The socket read buffer capacity is socket.appReadBufSize
+            int limit = socketBufferHandler.getReadBuffer().capacity();
+            if (to.remaining() >= limit) {
+                to.limit(to.position() + limit);
+                nRead = fillReadBuffer(block, to);
+                updateLastRead();
+            } else {
+                // Fill the read buffer as best we can.
+                nRead = fillReadBuffer(block);
+                updateLastRead();
+
+                // Fill as much of the remaining byte array as possible with the
+                // data that was just read
+                if (nRead > 0) {
+                    nRead = populateReadBuffer(to);
+                }
+            }
+            return nRead;
         }
 
 
@@ -1193,31 +1209,35 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
 
 
         private int fillReadBuffer(boolean block) throws IOException {
+            socketBufferHandler.configureReadBufferForWrite();
+            return fillReadBuffer(block, socketBufferHandler.getReadBuffer());
+        }
+
+
+        private int fillReadBuffer(boolean block, ByteBuffer to) throws IOException {
             int nRead;
             NioChannel channel = getSocket();
-            socketBufferHandler.configureReadBufferForWrite();
             if (block) {
                 Selector selector = null;
                 try {
                     selector = pool.get();
-                } catch ( IOException x ) {
+                } catch (IOException x) {
                     // Ignore
                 }
                 try {
-                    NioEndpoint.NioSocketWrapper att =
-                            (NioEndpoint.NioSocketWrapper) channel.getAttachment();
+                    NioEndpoint.NioSocketWrapper att = (NioEndpoint.NioSocketWrapper) channel
+                            .getAttachment();
                     if (att == null) {
                         throw new IOException("Key must be cancelled.");
                     }
-                    nRead = pool.read(socketBufferHandler.getReadBuffer(),
-                            channel, selector, att.getReadTimeout());
+                    nRead = pool.read(to, channel, selector, att.getReadTimeout());
                 } finally {
                     if (selector != null) {
                         pool.put(selector);
                     }
                 }
             } else {
-                nRead = channel.read(socketBufferHandler.getReadBuffer());
+                nRead = channel.read(to);
                 if (nRead == -1) {
                     throw new EOFException();
                 }
@@ -1227,9 +1247,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
 
 
         @Override
-        protected void doWrite(boolean block) throws IOException {
-            socketBufferHandler.configureWriteBufferForRead();
-
+        protected void doWrite(boolean block, ByteBuffer from) throws IOException {
             long writeTimeout = getWriteTimeout();
             Selector selector = null;
             try {
@@ -1238,15 +1256,16 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
                 // Ignore
             }
             try {
-                pool.write(socketBufferHandler.getWriteBuffer(), getSocket(),
-                        selector, writeTimeout, block);
+                pool.write(from, getSocket(), selector, writeTimeout, block);
                 if (block) {
                     // Make sure we are flushed
                     do {
-                        if (getSocket().flush(true, selector, writeTimeout)) break;
+                        if (getSocket().flush(true, selector, writeTimeout)) {
+                            break;
+                        }
                     } while (true);
                 }
-                lastWrite = System.currentTimeMillis();
+                updateLastWrite();
             } finally {
                 if (selector != null) {
                     pool.put(selector);
@@ -1362,12 +1381,18 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
                 // Need to re-negotiate SSL connection
                 engine.setNeedClientAuth(true);
                 try {
-                    sslChannel.rehandshake(getEndpoint().getSoTimeout());
+                    sslChannel.rehandshake(getEndpoint().getConnectionTimeout());
                     ((JSSESupport) sslSupport).setSession(engine.getSession());
                 } catch (IOException ioe) {
                     log.warn(sm.getString("socket.sslreneg",ioe));
                 }
             }
+        }
+
+
+        @Override
+        public void setAppReadBufHandler(ApplicationBufferHandler handler) {
+            getSocket().setAppReadBufHandler(handler);
         }
     }
 
@@ -1394,10 +1419,15 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel> {
 
                 try {
                     if (key != null) {
-                        // For STOP there is no point trying to handshake as the
-                        // Poller has been stopped.
-                        if (socket.isHandshakeComplete() || event == SocketEvent.STOP) {
+                        if (socket.isHandshakeComplete()) {
+                            // No TLS handshaking required. Let the handler
+                            // process this socket / event combination.
                             handshake = 0;
+                        } else if (event == SocketEvent.STOP || event == SocketEvent.DISCONNECT ||
+                                event == SocketEvent.ERROR) {
+                            // Unable to complete the TLS handshake. Treat it as
+                            // if the handshake failed.
+                            handshake = -1;
                         } else {
                             handshake = socket.handshake(key.isReadable(), key.isWritable());
                             // The handshake process reads/writes from/to the

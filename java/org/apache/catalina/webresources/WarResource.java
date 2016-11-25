@@ -16,32 +16,28 @@
  */
 package org.apache.catalina.webresources;
 
-import java.io.IOException;
-import java.net.URL;
-import java.net.URLConnection;
-import java.net.URLStreamHandler;
+import java.util.jar.JarEntry;
 
-public class WarURLStreamHandler extends URLStreamHandler {
+import org.apache.juli.logging.Log;
+import org.apache.juli.logging.LogFactory;
 
-    @Override
-    protected void parseURL(URL u, String spec, int start, int limit) {
-        // Need to make this look like a JAR URL for the WAR file
-        // Assumes that the spec is absolute and starts war:file:/...
+/**
+ * Represents a single resource (file or directory) that is located within a
+ * WAR.
+ */
+public class WarResource extends AbstractSingleArchiveResource {
 
-        // Only the path needs to be changed
-        String path = "jar:" + spec.substring(4);
-        if (path.contains("*/")) {
-            path = path.replaceFirst("\\*/", "!/");
-        } else {
-            path = path.replaceFirst("\\^/", "!/");
-        }
+    private static final Log log = LogFactory.getLog(WarResource.class);
 
-        setURL(u, u.getProtocol(), "", -1, null, null,
-                path, null, null);
+
+    public WarResource(AbstractArchiveResourceSet archiveResourceSet, String webAppPath,
+            String baseUrl, JarEntry jarEntry) {
+        super(archiveResourceSet, webAppPath, "war:" + baseUrl + "*/", jarEntry, baseUrl);
     }
 
+
     @Override
-    protected URLConnection openConnection(URL u) throws IOException {
-        return new WarURLConnection(u);
+    protected Log getLog() {
+        return log;
     }
 }

@@ -80,6 +80,7 @@ import org.apache.tomcat.util.bcel.classfile.ElementValue;
 import org.apache.tomcat.util.bcel.classfile.ElementValuePair;
 import org.apache.tomcat.util.bcel.classfile.JavaClass;
 import org.apache.tomcat.util.buf.UriUtil;
+import org.apache.tomcat.util.descriptor.InputSourceUtil;
 import org.apache.tomcat.util.descriptor.XmlErrorHandler;
 import org.apache.tomcat.util.descriptor.web.ContextEjb;
 import org.apache.tomcat.util.descriptor.web.ContextEnvironment;
@@ -652,6 +653,9 @@ public class ContextConfig implements LifecycleListener {
             }
         }
 
+        // Re-calculate now docBase is a canonical path
+        docBaseInAppBase = docBase.startsWith(appBase.getPath() + File.separatorChar);
+
         if (docBaseInAppBase) {
             docBase = docBase.substring(appBase.getPath().length());
             docBase = docBase.replace(File.separatorChar, '/');
@@ -1141,12 +1145,17 @@ public class ContextConfig implements LifecycleListener {
                         context.getResources().listResources("/WEB-INF/classes");
 
                 for (WebResource webResource : webResources) {
+                    // Skip the META-INF directory from any JARs that have been
+                    // expanded in to WEB-INF/classes (sometimes IDEs do this).
+                    if ("META-INF".equals(webResource.getName())) {
+                        continue;
+                    }
                     processAnnotationsWebResource(webResource, webXml,
                             webXml.isMetadataComplete(), javaClassCache);
                 }
             }
 
-            // Step 5. Process JARs for annotations for annotations and
+            // Step 5. Process JARs for annotations and
             // @HandlesTypes matches - only need to process those fragments we
             // are going to use (remember orderedFragments includes any
             // container fragments)
@@ -1364,7 +1373,7 @@ public class ContextConfig implements LifecycleListener {
         }
         for (Entry<String, String> entry :
                 webxml.getServletMappings().entrySet()) {
-            context.addServletMapping(entry.getKey(), entry.getValue());
+            context.addServletMappingDecoded(entry.getKey(), entry.getValue());
         }
         SessionConfig sessionConfig = webxml.getSessionConfig();
         if (sessionConfig != null) {
@@ -1417,7 +1426,7 @@ public class ContextConfig implements LifecycleListener {
             }
             if (context.findChild(jspServletName) != null) {
                 for (String urlPattern : jspPropertyGroup.getUrlPatterns()) {
-                    context.addServletMapping(urlPattern, jspServletName, true);
+                    context.addServletMappingDecoded(urlPattern, jspServletName, true);
                 }
             } else {
                 if(log.isDebugEnabled()) {
@@ -1496,6 +1505,8 @@ public class ContextConfig implements LifecycleListener {
 
         if (entry != null && entry.getGlobalTimeStamp() == globalTimeStamp &&
                 entry.getHostTimeStamp() == hostTimeStamp) {
+            InputSourceUtil.close(globalWebXml);
+            InputSourceUtil.close(hostWebXml);
             return entry.getWebXml();
         }
 
@@ -2434,6 +2445,7 @@ public class ContextConfig implements LifecycleListener {
                 urlPatterns = processAnnotationsStringArray(evp.getValue());
                 urlPatternsSet = urlPatterns.length > 0;
                 for (String urlPattern : urlPatterns) {
+                    // % decoded (if required) using UTF-8
                     filterMap.addURLPattern(urlPattern);
                 }
             } else if ("servletNames".equals(name)) {
@@ -2515,6 +2527,7 @@ public class ContextConfig implements LifecycleListener {
                 if (urlPatternsSet
                         && (urlsPatterns == null || urlsPatterns.length == 0)) {
                     for (String urlPattern : filterMap.getURLPatterns()) {
+                        // % decoded (if required) using UTF-8
                         descMap.addURLPattern(urlPattern);
                     }
                 }
