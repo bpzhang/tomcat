@@ -181,7 +181,7 @@
   <property name="test.jvmarg.egd" value="" />
 
   <!-- Location of OpenSSL binary (file name, not directory) -->
-  <!-- The OpenSSL tests cases be disabled by specifing an invalid path here -->
+  <!-- The OpenSSL tests cases be disabled by specifying an invalid path here -->
   <property name="test.openssl.path" value="" />
 
   <!-- Include .gitignore in src distributions. -->
@@ -293,7 +293,6 @@
     <include name="javax/annotation/**" />
     <include name="javax/ejb/**" />
     <include name="javax/persistence/**" />
-    <include name="javax/xml/ws/**" />
   </patternset>
 
   <patternset id="files.servlet-api">
@@ -336,6 +335,8 @@
     <include name="org/apache/catalina/startup/CatalinaProperties.*" />
     <include name="org/apache/catalina/startup/ClassLoaderFactory.*" />
     <include name="org/apache/catalina/startup/ClassLoaderFactory$*.*" />
+    <include name="org/apache/catalina/startup/SafeForkJoinWorkerThreadFactory.*" />
+    <include name="org/apache/catalina/startup/SafeForkJoinWorkerThreadFactory$*.*" />
     <include name="org/apache/catalina/startup/Tool.*" />
     <include name="org/apache/catalina/security/SecurityClassLoad.*" />
     <include name="org/apache/catalina/webresources/war/**" />
@@ -546,6 +547,8 @@
         <exclude name="output/**"/>
         <exclude name="modules/**"/>
         <exclude name="**/*.mdl"/>
+        <exclude name="**/*.pem"/>
+        <exclude name="**/*.svg"/>
         <exclude name="**/*_2.xml"/>
         <exclude name="res/checkstyle/header-al2.txt"/>
         <!-- Exclude auto-generated files -->
@@ -559,6 +562,8 @@
         <exclude name="test/webapp/bug53257/**/*.txt"/>
         <exclude name="test/webapp-fragments/WEB-INF/classes/*.txt"/>
         <exclude name="test/webresources/**"/>
+        <!-- Exclude test files with unusual encodings -->
+        <exclude name="test/webapp/jsp/encoding/**"/>
       </fileset>
       <fileset dir="modules/jdbc-pool" >
         <exclude name=".*/**"/>
@@ -613,6 +618,10 @@
         <exclude name="nbproject/**"/>
         <exclude name="output/**"/>
         <exclude name="modules/**"/>
+        <!-- Exclude these since some svn clients do not seem able to handle
+             UTF-16 line-ending conversion -->
+        <exclude name="test/webapp/jsp/encoding/bom-utf16*"/>
+        <exclude name="test/webapp/jsp/encoding/bom-none-prolog-utf16*"/>
       </fileset>
       <fileset dir="modules/jdbc-pool" >
         <patternset refid="text.files" />
@@ -1460,6 +1469,8 @@
             <exclude name="org/apache/tomcat/util/net/openssl/ciphers/**" unless="${test.openssl.exists}" />
             <!-- Exclude performance tests. E.g. on systems with slow/inconsistent timing -->
             <exclude name="**/*Performance.java" if="${test.excludePerformance}" />
+            <!-- Exclude a configurable list of tests -->
+            <exclude name="${test.exclude}" />
           </fileset>
         </batchtest>
       </junit>
@@ -1912,8 +1923,9 @@ Apache Tomcat ${version} native binaries for Win64 AMD64/EMT64 platform.
     <!-- Copy deployer documentation -->
     <copy todir="${tomcat.deployer}">
       <fileset dir="${tomcat.build}/webapps/docs">
-        <include name="images/asf-logo.gif" />
-        <include name="images/tomcat.gif" />
+        <include name="images/asf-logo.svg" />
+        <include name="images/tomcat.png" />
+        <include name="images/docs-stylesheet.css" />
       </fileset>
     </copy>
     <copy tofile="${tomcat.deployer}/deployer-howto.html"
@@ -1990,7 +2002,6 @@ skip.installer property in build.properties" />
   </target>
 
   <target name="-installer-prep"
-      description="Prepares file structure required to build installer"
       unless="skip.installer" depends="dist-static,-installer-init">
     <copy todir="${tomcat.dist}">
       <fileset dir="res">
@@ -2003,6 +2014,8 @@ skip.installer property in build.properties" />
     <copy file="${nsis.installoptions.dll}" todir="${tomcat.dist}" />
     <copy file="${nsis.nsexec.dll}" todir="${tomcat.dist}" />
     <copy file="${nsis.nsisdl.dll}" todir="${tomcat.dist}" />
+    <copy file="${nsis.system.dll}" todir="${tomcat.dist}" />
+    <copy file="${nsis.nsdialogs.dll}" todir="${tomcat.dist}" />
     <copy file="res/tomcat.nsi" tofile="${tomcat.dist}/tomcat.nsi" overwrite="true" encoding="ISO-8859-1">
       <filterset refid="version.filters"/>
     </copy>
@@ -2013,7 +2026,6 @@ skip.installer property in build.properties" />
   </target>
 
   <target name="-installer-create-tempinstaller"
-      description="Creates the temporary installer"
       unless="skip.installer" depends="-installer-prep">
     <exec dir="${tomcat.dist}" executable="${nsis.exe}" osfamily="windows">
       <arg value="/DUNINSTALLONLY" />
@@ -2031,7 +2043,6 @@ skip.installer property in build.properties" />
   </target>
 
   <target name="-installer-create-uninstaller"
-      description="Execute the temporary installer to create the uninstaller"
       unless="skip.installer" depends="-installer-create-tempinstaller">
     <!-- Execute the temporary installer to create the uninstaller -->
     <exec dir="${tomcat.dist}" executable="${tomcat.dist}/tempinstaller.exe"
@@ -2043,7 +2054,6 @@ skip.installer property in build.properties" />
   </target>
 
   <target name="-installer-sign-uninstaller"
-      description="Sign the uninstaller executable"
       unless="skip.installer" depends="-installer-create-uninstaller"
       if="${do.codesigning}">
     <taskdef name="signcode"
@@ -2051,6 +2061,8 @@ skip.installer property in build.properties" />
         classpath="${tomcat.classes}" />
     <signcode userName="${codesigning.user}" password="${codesigning.pwd}"
         partnerCode="${codesigning.partnercode}"
+        keyStore="${codesigning.keyStore}"
+        keyStorePassword="${codesigning.keyStorePassword}"
         applicationName="Apache Tomcat ${version.major.minor} Uninstaller"
         applicationversion="${version}"
         signingService="${codesigning.service}">
@@ -2060,8 +2072,8 @@ skip.installer property in build.properties" />
     </signcode>
   </target>
 
-  <target name="-installer" description="Builds the installer executable"
-      unless="skip.installer" depends="-installer-sign-uninstaller">
+  <target name="-installer" unless="skip.installer"
+      depends="-installer-sign-uninstaller">
     <exec dir="${tomcat.dist}" executable="${nsis.exe}" osfamily="windows">
       <arg value="/DNSISDIR=${nsis.home}" />
       <arg value="/V2" />
@@ -2077,13 +2089,16 @@ skip.installer property in build.properties" />
     <hashAndSign file="${tomcat.release}/v${version}/bin/${final.name}.exe" />
   </target>
 
-  <target name="installer-sign" description="Builds and signs the Windows installer"
+  <target name="installer-sign"
+      description="Builds and optionally signs the Windows installer"
       depends="-installer" if="${do.codesigning}" >
     <taskdef name="signcode"
         classname="org.apache.tomcat.buildutil.SignCode"
         classpath="${tomcat.classes}" />
     <signcode userName="${codesigning.user}" password="${codesigning.pwd}"
               partnerCode="${codesigning.partnercode}"
+              keyStore="${codesigning.keyStore}"
+              keyStorePassword="${codesigning.keyStorePassword}"
               applicationName="Apache Tomcat ${version.major.minor}"
               applicationversion="${version}"
               signingService="${codesigning.service}">
@@ -2311,7 +2326,7 @@ skip.installer property in build.properties" />
         <exclude name="bin/*.dll"/>
       </tarfileset>
       <!-- These need to be added after the bin directory is added else the  -->
-      <!-- bin diretcory will pick up the wrong permissions.                 -->
+      <!-- bin directory will pick up the wrong permissions.                 -->
       <tarfileset dir="${tomcat.dist}" dirmode="750" filemode="750" prefix="${final.name}">
         <include name="bin/catalina.sh" />
         <include name="bin/configtest.sh" />

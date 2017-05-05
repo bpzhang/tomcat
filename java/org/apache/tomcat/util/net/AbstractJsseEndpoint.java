@@ -16,6 +16,10 @@
  */
 package org.apache.tomcat.util.net;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.channels.NetworkChannel;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -26,11 +30,12 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSessionContext;
 
+import org.apache.tomcat.util.compat.JreCompat;
 import org.apache.tomcat.util.net.SSLHostConfig.Type;
 import org.apache.tomcat.util.net.openssl.OpenSSLImplementation;
 import org.apache.tomcat.util.net.openssl.ciphers.Cipher;
 
-public abstract class AbstractJsseEndpoint<S> extends AbstractEndpoint<S> {
+public abstract class AbstractJsseEndpoint<S,U> extends AbstractEndpoint<S,U> {
 
     private String sslImplementationName = null;
     private int sniParseLimit = 64 * 1024;
@@ -79,6 +84,13 @@ public abstract class AbstractJsseEndpoint<S> extends AbstractEndpoint<S> {
             for (SSLHostConfig sslHostConfig : sslHostConfigs.values()) {
                 createSSLContext(sslHostConfig);
             }
+
+            // Validate default SSLHostConfigName
+            if (sslHostConfigs.get(getDefaultSSLHostConfigName()) == null) {
+                throw new IllegalArgumentException(sm.getString("endpoint.noSslHostConfig",
+                        getDefaultSSLHostConfigName(), getName()));
+            }
+
         }
     }
 
@@ -133,7 +145,8 @@ public abstract class AbstractJsseEndpoint<S> extends AbstractEndpoint<S> {
     }
 
 
-    protected SSLEngine createSSLEngine(String sniHostName, List<Cipher> clientRequestedCiphers) {
+    protected SSLEngine createSSLEngine(String sniHostName, List<Cipher> clientRequestedCiphers,
+            List<String> clientRequestedApplicationProtocols) {
         SSLHostConfig sslHostConfig = getSSLHostConfig(sniHostName);
 
         SSLHostConfigCertificate certificate = selectCertificate(sslHostConfig, clientRequestedCiphers);
@@ -164,6 +177,20 @@ public abstract class AbstractJsseEndpoint<S> extends AbstractEndpoint<S> {
 
         SSLParameters sslParameters = engine.getSSLParameters();
         sslParameters.setUseCipherSuitesOrder(sslHostConfig.getHonorCipherOrder());
+        if (JreCompat.isJre9Available() && clientRequestedApplicationProtocols.size() > 0 &&
+                negotiableProtocols.size() > 0) {
+            // Only try to negotiate if both client and server have at least
+            // one protocol in common
+            // Note: Tomcat does not explicitly negotiate http/1.1
+            // TODO: Is this correct? Should it change?
+            List<String> commonProtocols = new ArrayList<>();
+            commonProtocols.addAll(negotiableProtocols);
+            commonProtocols.retainAll(clientRequestedApplicationProtocols);
+            if (commonProtocols.size() > 0) {
+                String[] commonProtocolsArray = commonProtocols.toArray(new String[commonProtocols.size()]);
+                JreCompat.getInstance().setApplicationProtocols(sslParameters, commonProtocolsArray);
+            }
+        }
         // In case the getter returns a defensive copy
         engine.setSSLParameters(sslParameters);
 
@@ -234,5 +261,22 @@ public abstract class AbstractJsseEndpoint<S> extends AbstractEndpoint<S> {
                 certificate.setSslContext(null);
             }
         }
+    }
+
+
+    protected abstract NetworkChannel getServerSocket();
+
+
+    @Override
+    protected final InetSocketAddress getLocalAddress() throws IOException {
+        NetworkChannel serverSock = getServerSocket();
+        if (serverSock == null) {
+            return null;
+        }
+        SocketAddress sa = serverSock.getLocalAddress();
+        if (sa instanceof InetSocketAddress) {
+            return (InetSocketAddress) sa;
+        }
+        return null;
     }
 }

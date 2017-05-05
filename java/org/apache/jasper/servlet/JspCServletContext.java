@@ -588,6 +588,12 @@ public class JspCServletContext implements ServletContext {
 
 
     @Override
+    public javax.servlet.ServletRegistration.Dynamic addJspFile(String jspName, String jspFile) {
+        return null;
+    }
+
+
+    @Override
     public <T extends Filter> T createFilter(Class<T> c)
             throws ServletException {
         return null;
@@ -689,5 +695,35 @@ public class JspCServletContext implements ServletContext {
     @Override
     public String getVirtualServerName() {
         return null;
+    }
+
+    @Override
+    public int getSessionTimeout() {
+        return 0;
+    }
+
+    @Override
+    public void setSessionTimeout(int sessionTimeout) {
+        // NO-OP
+    }
+
+    @Override
+    public String getRequestCharacterEncoding() {
+        return null;
+    }
+
+    @Override
+    public void setRequestCharacterEncoding(String encoding) {
+        // NO-OP
+    }
+
+    @Override
+    public String getResponseCharacterEncoding() {
+        return null;
+    }
+
+    @Override
+    public void setResponseCharacterEncoding(String encoding) {
+        // NO-OP
     }
 }

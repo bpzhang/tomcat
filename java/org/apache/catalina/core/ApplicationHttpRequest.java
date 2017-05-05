@@ -21,6 +21,8 @@ package org.apache.catalina.core;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -33,8 +35,8 @@ import javax.servlet.ServletContext;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpSession;
-import javax.servlet.http.Mapping;
 import javax.servlet.http.PushBuilder;
+import javax.servlet.http.ServletMapping;
 
 import org.apache.catalina.Context;
 import org.apache.catalina.Globals;
@@ -190,7 +192,7 @@ class ApplicationHttpRequest extends HttpServletRequestWrapper {
     /**
      * The mapping for this request.
      */
-    private Mapping mapping = null;
+    private ServletMapping mapping = null;
 
 
     /**
@@ -506,7 +508,7 @@ class ApplicationHttpRequest extends HttpServletRequestWrapper {
 
 
     @Override
-    public Mapping getMapping() {
+    public ServletMapping getServletMapping() {
         return mapping;
     }
 
@@ -617,7 +619,7 @@ class ApplicationHttpRequest extends HttpServletRequestWrapper {
 
 
     @Override
-    public PushBuilder getPushBuilder() {
+    public PushBuilder newPushBuilder() {
         return new ApplicationPushBuilder(this);
     }
 
@@ -690,7 +692,7 @@ class ApplicationHttpRequest extends HttpServletRequestWrapper {
         queryString = request.getQueryString();
         requestURI = request.getRequestURI();
         servletPath = request.getServletPath();
-        mapping = request.getMapping();
+        mapping = request.getServletMapping();
     }
 
 
@@ -749,7 +751,7 @@ class ApplicationHttpRequest extends HttpServletRequestWrapper {
     }
 
 
-    void setMapping(Mapping mapping) {
+    void setMapping(ServletMapping mapping) {
         this.mapping = mapping;
     }
 
@@ -871,19 +873,26 @@ class ApplicationHttpRequest extends HttpServletRequestWrapper {
         MessageBytes queryMB = MessageBytes.newInstance();
         queryMB.setString(queryParamString);
 
+        // TODO
+        // - Should only use body encoding if useBodyEncodingForURI is true
+        // - Otherwise, should use URIEncoding
+        // - The problem is that the connector is not available...
+        // - To add to the fun, the URI default changed in Servlet 4.0 to UTF-8
+
         String encoding = getCharacterEncoding();
-        // No need to process null value, as ISO-8859-1 is the default encoding
-        // in MessageBytes.toBytes().
+        Charset charset = null;
         if (encoding != null) {
             try {
-                queryMB.setCharset(B2CConverter.getCharset(encoding));
-            } catch (UnsupportedEncodingException ignored) {
-                // Fall-back to ISO-8859-1
+                charset = B2CConverter.getCharset(encoding);
+                queryMB.setCharset(charset);
+            } catch (UnsupportedEncodingException e) {
+                // Fall-back to default (ISO-8859-1)
+                charset = StandardCharsets.ISO_8859_1;
             }
         }
 
         paramParser.setQuery(queryMB);
-        paramParser.setQueryStringEncoding(encoding);
+        paramParser.setQueryStringCharset(charset);
         paramParser.handleQueryParameters();
 
         // Insert the additional parameters from the dispatch target

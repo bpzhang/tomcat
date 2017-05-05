@@ -42,9 +42,9 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import javax.servlet.http.HttpUpgradeHandler;
-import javax.servlet.http.Mapping;
 import javax.servlet.http.Part;
 import javax.servlet.http.PushBuilder;
+import javax.servlet.http.ServletMapping;
 
 public class TesterHttpServletRequest implements HttpServletRequest {
 
@@ -265,7 +265,7 @@ public class TesterHttpServletRequest implements HttpServletRequest {
     }
 
     @Override
-    public Mapping getMapping() {
+    public ServletMapping getServletMapping() {
         throw new RuntimeException("Not implemented");
     }
 
@@ -443,7 +443,12 @@ public class TesterHttpServletRequest implements HttpServletRequest {
     }
 
     @Override
-    public PushBuilder getPushBuilder() {
+    public PushBuilder newPushBuilder() {
+        throw new RuntimeException("Not implemented");
+    }
+
+    @Override
+    public Map<String, String> getTrailerFields() {
         throw new RuntimeException("Not implemented");
     }
 }

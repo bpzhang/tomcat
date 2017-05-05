@@ -30,6 +30,7 @@ import java.util.Stack;
 import java.util.TimeZone;
 import java.util.Vector;
 
+import javax.servlet.DispatcherType;
 import javax.servlet.RequestDispatcher;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
@@ -40,6 +41,7 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 
 import org.apache.catalina.WebResource;
+import org.apache.catalina.connector.RequestFacade;
 import org.apache.catalina.util.ConcurrentDateFormat;
 import org.apache.catalina.util.DOMWriter;
 import org.apache.catalina.util.XMLWriter;
@@ -303,6 +305,14 @@ public class WebdavServlet
         throws ServletException, IOException {
 
         final String path = getRelativePath(req);
+
+        // Error page check needs to come before special path check since
+        // custom error pages are often located below WEB-INF so they are
+        // not directly accessible.
+        if (req.getDispatcherType() == DispatcherType.ERROR) {
+            doGet(req, resp);
+            return;
+        }
 
         // Block access to special subdirectories.
         // DefaultServlet assumes it services resources from the root of the web app
@@ -1523,7 +1533,7 @@ public class WebdavServlet
         }
 
         // Remove url encoding from destination
-        destinationPath = UDecoder.URLDecode(destinationPath, "UTF8");
+        destinationPath = UDecoder.URLDecode(destinationPath, StandardCharsets.UTF_8);
 
         int protocolIndex = destinationPath.indexOf("://");
         if (protocolIndex >= 0) {
@@ -2303,7 +2313,12 @@ public class WebdavServlet
             return methodsAllowed;
         }
 
-        methodsAllowed.append("OPTIONS, GET, HEAD, POST, DELETE, TRACE");
+        methodsAllowed.append("OPTIONS, GET, HEAD, POST, DELETE");
+        // Trace - assume disabled unless we can prove otherwise
+        if (req instanceof RequestFacade &&
+                ((RequestFacade) req).getAllowTrace()) {
+            methodsAllowed.append(", TRACE");
+        }
         methodsAllowed.append(", PROPPATCH, COPY, MOVE, LOCK, UNLOCK");
 
         if (listings) {

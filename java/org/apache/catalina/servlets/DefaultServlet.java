@@ -32,6 +32,7 @@ import java.io.Reader;
 import java.io.Serializable;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.security.AccessController;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -400,6 +401,18 @@ public class DefaultServlet extends HttpServlet {
     }
 
 
+    @Override
+    protected void service(HttpServletRequest req, HttpServletResponse resp)
+            throws ServletException, IOException {
+
+        if (req.getDispatcherType() == DispatcherType.ERROR) {
+            doGet(req, resp);
+        } else {
+            super.service(req, resp);
+        }
+    }
+
+
     /**
      * Process a GET request for the specified resource.
      *
@@ -692,7 +705,7 @@ public class DefaultServlet extends HttpServlet {
      * @return the rewritten path
      */
     protected String rewriteUrl(String path) {
-        return URLEncoder.DEFAULT.encode(path, "UTF-8");
+        return URLEncoder.DEFAULT.encode(path, StandardCharsets.UTF_8);
     }
 
 
@@ -735,6 +748,7 @@ public class DefaultServlet extends HttpServlet {
         }
 
         WebResource resource = resources.getResource(path);
+        boolean isError = DispatcherType.ERROR == request.getDispatcherType();
 
         if (!resource.exists()) {
             // Check if we're included so we can return the appropriate
@@ -750,7 +764,12 @@ public class DefaultServlet extends HttpServlet {
                         "defaultServlet.missingResource", requestUri));
             }
 
-            response.sendError(HttpServletResponse.SC_NOT_FOUND, requestUri);
+            if (isError) {
+                response.sendError(((Integer) request.getAttribute(
+                        RequestDispatcher.ERROR_STATUS_CODE)).intValue());
+            } else {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, requestUri);
+            }
             return;
         }
 
@@ -769,7 +788,12 @@ public class DefaultServlet extends HttpServlet {
                         "defaultServlet.missingResource", requestUri));
             }
 
-            response.sendError(HttpServletResponse.SC_FORBIDDEN, requestUri);
+            if (isError) {
+                response.sendError(((Integer) request.getAttribute(
+                        RequestDispatcher.ERROR_STATUS_CODE)).intValue());
+            } else {
+                response.sendError(HttpServletResponse.SC_FORBIDDEN, requestUri);
+            }
             return;
         }
 
@@ -786,8 +810,6 @@ public class DefaultServlet extends HttpServlet {
             response.sendError(HttpServletResponse.SC_NOT_FOUND, requestUri);
             return;
         }
-
-        boolean isError = response.getStatus() >= HttpServletResponse.SC_BAD_REQUEST;
 
         boolean included = false;
         // Check if the conditions specified in the optional If headers are
@@ -1083,7 +1105,7 @@ public class DefaultServlet extends HttpServlet {
     }
 
     /**
-     * Match the client preferred encoding formts to the available precompressed resources.
+     * Match the client preferred encoding formats to the available precompressed resources.
      *
      * @param request   The servlet request we are processing
      * @param precompressedResources   List of available precompressed resources.
@@ -1873,14 +1895,16 @@ public class DefaultServlet extends HttpServlet {
                                   HttpServletResponse response,
                                   WebResource resource,
                                   long length, Range range) {
+        String canonicalPath;
         if (sendfileSize > 0
-            && resource.isFile()
             && length > sendfileSize
-            && (resource.getCanonicalPath() != null)
             && (Boolean.TRUE.equals(request.getAttribute(Globals.SENDFILE_SUPPORTED_ATTR)))
             && (request.getClass().getName().equals("org.apache.catalina.connector.RequestFacade"))
-            && (response.getClass().getName().equals("org.apache.catalina.connector.ResponseFacade"))) {
-            request.setAttribute(Globals.SENDFILE_FILENAME_ATTR, resource.getCanonicalPath());
+            && (response.getClass().getName().equals("org.apache.catalina.connector.ResponseFacade"))
+            && resource.isFile()
+            && ((canonicalPath = resource.getCanonicalPath()) != null)
+            ) {
+            request.setAttribute(Globals.SENDFILE_FILENAME_ATTR, canonicalPath);
             if (range == null) {
                 request.setAttribute(Globals.SENDFILE_FILE_START_ATTR, Long.valueOf(0L));
                 request.setAttribute(Globals.SENDFILE_FILE_END_ATTR, Long.valueOf(length));
@@ -1924,7 +1948,7 @@ public class DefaultServlet extends HttpServlet {
                         conditionSatisfied = true;
                 }
 
-                // If none of the given ETags match, 412 Precodition failed is
+                // If none of the given ETags match, 412 Precondition failed is
                 // sent back
                 if (!conditionSatisfied) {
                     response.sendError

@@ -19,6 +19,7 @@ package org.apache.coyote;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -42,6 +43,8 @@ import org.apache.tomcat.util.collections.SynchronizedStack;
 import org.apache.tomcat.util.modeler.Registry;
 import org.apache.tomcat.util.net.AbstractEndpoint;
 import org.apache.tomcat.util.net.AbstractEndpoint.Handler;
+import org.apache.tomcat.util.net.SSLHostConfig;
+import org.apache.tomcat.util.net.SSLHostConfigCertificate;
 import org.apache.tomcat.util.net.SocketEvent;
 import org.apache.tomcat.util.net.SocketWrapperBase;
 import org.apache.tomcat.util.res.StringManager;
@@ -74,6 +77,10 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
     protected ObjectName tpOname = null;
 
 
+    private Set<ObjectName> sslOnames = new HashSet<>();
+    private Set<ObjectName> sslCertOnames = new HashSet<>();
+
+
     /**
      * Unique ID for this connector. Only used if the connector is configured
      * to use a random port as the port will change if stop(), start() is
@@ -87,7 +94,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
      * ProtocolHandler implementation (ProtocolHandler using NIO, requires NIO
      * Endpoint etc.).
      */
-    private final AbstractEndpoint<S> endpoint;
+    private final AbstractEndpoint<S,?> endpoint;
 
 
     private Handler<S> handler;
@@ -103,7 +110,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
     private AsyncTimeout asyncTimeout = null;
 
 
-    public AbstractProtocol(AbstractEndpoint<S> endpoint) {
+    public AbstractProtocol(AbstractEndpoint<S,?> endpoint) {
         this.endpoint = endpoint;
         setConnectionLinger(Constants.DEFAULT_CONNECTION_LINGER);
         setTcpNoDelay(Constants.DEFAULT_TCP_NO_DELAY);
@@ -170,6 +177,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
     }
 
 
+    private String clientCertProvider = null;
     /**
      * When client certificate information is presented in a form other than
      * instances of {@link java.security.cert.X509Certificate} it needs to be
@@ -178,8 +186,9 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
      * the AJP connectors, the HTTP APR connector and with the
      * {@link org.apache.catalina.valves.SSLValve}. If not specified, the
      * default provider will be used.
+     *
+     * @return The name of the JSSE provider to use
      */
-    protected String clientCertProvider = null;
     public String getClientCertProvider() { return clientCertProvider; }
     public void setClientCertProvider(String s) { this.clientCertProvider = s; }
 
@@ -249,6 +258,12 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
     }
 
 
+    /**
+     * The time Tomcat will wait for a subsequent request before closing the
+     * connection. The default is {@link #getConnectionTimeout()}.
+     *
+     * @return The timeout in milliseconds
+     */
     public int getKeepAliveTimeout() { return endpoint.getKeepAliveTimeout(); }
     public void setKeepAliveTimeout(int keepAliveTimeout) {
         endpoint.setKeepAliveTimeout(keepAliveTimeout);
@@ -364,7 +379,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
 
     // ----------------------------------------------- Accessors for sub-classes
 
-    protected AbstractEndpoint<S> getEndpoint() {
+    protected AbstractEndpoint<S,?> getEndpoint() {
         return endpoint;
     }
 
@@ -525,7 +540,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
 
         if (this.domain != null) {
             try {
-                tpOname = new ObjectName(domain + ":" + "type=ThreadPool,name=" + getName());
+                tpOname = new ObjectName(domain + ":type=ThreadPool,name=" + getName());
                 Registry.getRegistry(null, null).registerComponent(endpoint, tpOname, null);
             } catch (Exception e) {
                 getLog().error(sm.getString( "abstractProtocolHandler.mbeanRegistrationFailed",
@@ -534,6 +549,22 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
             rgOname = new ObjectName(domain + ":type=GlobalRequestProcessor,name=" + getName());
             Registry.getRegistry(null, null).registerComponent(
                     getHandler().getGlobal(), rgOname, null);
+
+            for (SSLHostConfig sslHostConfig : getEndpoint().findSslHostConfigs()) {
+                ObjectName sslOname = new ObjectName(domain + ":type=SSLHostConfig,ThreadPool=" +
+                        getName() + ",name=" + ObjectName.quote(sslHostConfig.getHostName()));
+                Registry.getRegistry(null, null).registerComponent(sslHostConfig, sslOname, null);
+                sslOnames.add(sslOname);
+                for (SSLHostConfigCertificate sslHostConfigCert : sslHostConfig.getCertificates()) {
+                    ObjectName sslCertOname = new ObjectName(domain +
+                            ":type=SSLHostConfigCertificate,ThreadPool=" + getName() +
+                            ",Host=" + ObjectName.quote(sslHostConfig.getHostName()) +
+                            ",name=" + sslHostConfigCert.getType());
+                    Registry.getRegistry(null, null).registerComponent(
+                            sslHostConfigCert, sslCertOname, null);
+                    sslCertOnames.add(sslCertOname);
+                }
+            }
         }
 
         String endpointName = getName();
@@ -546,7 +577,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
     @Override
     public void start() throws Exception {
         if (getLog().isInfoEnabled()) {
-            getLog().info(sm.getString("abstractProtocolHandler.start", getNameInternal()));
+            getLog().info(sm.getString("abstractProtocolHandler.start", getName()));
         }
 
         endpoint.start();
@@ -571,6 +602,11 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
         }
 
         endpoint.pause();
+    }
+
+
+    public boolean isPaused() {
+        return endpoint.isPaused();
     }
 
 
@@ -627,6 +663,12 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
             if (rgOname != null) {
                 Registry.getRegistry(null, null).unregisterComponent(rgOname);
             }
+            for (ObjectName oname : sslOnames) {
+                Registry.getRegistry(null, null).unregisterComponent(oname);
+            }
+            for (ObjectName oname : sslCertOnames) {
+                Registry.getRegistry(null, null).unregisterComponent(oname);
+            }
         }
     }
 
@@ -678,8 +720,15 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
             S socket = wrapper.getSocket();
 
             Processor processor = connections.get(socket);
-            if ((status == SocketEvent.DISCONNECT || status == SocketEvent.ERROR)
-                    && processor == null) {
+            if (getLog().isDebugEnabled()) {
+                getLog().debug(sm.getString("abstractConnectionHandler.connectionsGet",
+                        processor, socket));
+            }
+
+            if (processor != null) {
+                // Make sure an async timeout doesn't fire
+                getProtocol().removeWaitingProcessor(processor);
+            } else if (status == SocketEvent.DISCONNECT || status == SocketEvent.ERROR) {
                 // Nothing to do. Endpoint requested a close and there is no
                 // longer a processor associated with this socket.
                 return SocketState.CLOSED;
@@ -726,6 +775,10 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                 }
                 if (processor == null) {
                     processor = recycledProcessors.pop();
+                    if (getLog().isDebugEnabled()) {
+                        getLog().debug(sm.getString("abstractConnectionHandler.processorPop",
+                                processor));
+                    }
                 }
                 if (processor == null) {
                     processor = getProtocol().createProcessor();
@@ -737,8 +790,6 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
 
                 // Associate the processor with the connection
                 connections.put(socket, processor);
-                // Make sure an async timeout doesn't fire
-                getProtocol().removeWaitingProcessor(processor);
 
                 SocketState state = SocketState.CLOSED;
                 do {
@@ -772,6 +823,10 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                             release(processor);
                             // Create the upgrade processor
                             processor = getProtocol().createUpgradeProcessor(wrapper, upgradeToken);
+                            if (getLog().isDebugEnabled()) {
+                                getLog().debug(sm.getString("abstractConnectionHandler.upgradeCreate",
+                                        processor, wrapper));
+                            }
                             wrapper.unRead(leftOverInput);
                             // Mark the connection as upgraded
                             wrapper.setUpgraded(true);
@@ -813,10 +868,9 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                     wrapper.registerReadInterest();
                 } else if (state == SocketState.SENDFILE) {
                     // Sendfile in progress. If it fails, the socket will be
-                    // closed. If it works, the socket will be re-added to the
-                    // poller
-                    connections.remove(socket);
-                    release(processor);
+                    // closed. If it works, the socket either be added to the
+                    // poller (or equivalent) to await more data or processed
+                    // if there are any pipe-lined requests remaining.
                 } else if (state == SocketState.UPGRADED) {
                     // Don't add sockets back to the poller if this was a
                     // non-blocking write otherwise the poller may trigger
@@ -826,6 +880,10 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                     if (status != SocketEvent.OPEN_WRITE) {
                         longPoll(wrapper, processor);
                     }
+                } else if (state == SocketState.SUSPENDED) {
+                    // Don't add sockets back to the poller.
+                    // The resumeProcessing() method will add this socket
+                    // to the poller.
                 } else {
                     // Connection closed. OK to recycle the processor. Upgrade
                     // processors are not recycled.
@@ -925,6 +983,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler,
                 // processors
                 if (!processor.isUpgrade()) {
                     recycledProcessors.push(processor);
+                    getLog().debug("Pushed Processor [" + processor + "]");
                 }
             }
         }

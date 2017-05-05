@@ -22,6 +22,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -46,6 +47,7 @@ import javax.servlet.ServletContextAttributeListener;
 import javax.servlet.ServletContextListener;
 import javax.servlet.ServletException;
 import javax.servlet.ServletRegistration;
+import javax.servlet.ServletRegistration.Dynamic;
 import javax.servlet.ServletRequestAttributeListener;
 import javax.servlet.ServletRequestListener;
 import javax.servlet.SessionCookieConfig;
@@ -54,7 +56,7 @@ import javax.servlet.descriptor.JspConfigDescriptor;
 import javax.servlet.http.HttpSessionAttributeListener;
 import javax.servlet.http.HttpSessionIdListener;
 import javax.servlet.http.HttpSessionListener;
-import javax.servlet.http.Mapping;
+import javax.servlet.http.ServletMapping;
 
 import org.apache.catalina.Container;
 import org.apache.catalina.Context;
@@ -481,11 +483,11 @@ public class ApplicationContext implements ServletContext {
         Wrapper wrapper = mappingData.wrapper;
         String wrapperPath = mappingData.wrapperPath.toString();
         String pathInfo = mappingData.pathInfo.toString();
-        Mapping mapping = (new ApplicationMapping(mappingData)).getMapping();
+        ServletMapping mapping = (new ApplicationMapping(mappingData)).getServletMapping();
 
         mappingData.recycle();
 
-        String encodedUri = URLEncoder.DEFAULT.encode(uriCC.toString(), "UTF-8");
+        String encodedUri = URLEncoder.DEFAULT.encode(uriCC.toString(), StandardCharsets.UTF_8);
 
         // Construct a RequestDispatcher to process this request
         return new ApplicationDispatcher(wrapper, encodedUri, wrapperPath, pathInfo,
@@ -811,7 +813,7 @@ public class ApplicationContext implements ServletContext {
             ExceptionUtils.handleThrowable(e.getCause());
             throw new ServletException(e);
         } catch (IllegalAccessException | NamingException | InstantiationException |
-                ClassNotFoundException e) {
+                ClassNotFoundException | NoSuchMethodException e) {
             throw new ServletException(e);
         }
     }
@@ -829,25 +831,61 @@ public class ApplicationContext implements ServletContext {
 
     @Override
     public ServletRegistration.Dynamic addServlet(String servletName, String className) {
-        return addServlet(servletName, className, null);
+        return addServlet(servletName, className, null, null);
     }
 
 
     @Override
     public ServletRegistration.Dynamic addServlet(String servletName, Servlet servlet) {
-        return addServlet(servletName, null, servlet);
+        return addServlet(servletName, null, servlet, null);
     }
 
 
     @Override
     public ServletRegistration.Dynamic addServlet(String servletName,
             Class<? extends Servlet> servletClass) {
-        return addServlet(servletName, servletClass.getName(), null);
+        return addServlet(servletName, servletClass.getName(), null, null);
     }
 
 
-    private ServletRegistration.Dynamic addServlet(String servletName,
-            String servletClass, Servlet servlet) throws IllegalStateException {
+    @Override
+    public Dynamic addJspFile(String jspName, String jspFile) {
+
+        // jspName is validated in addServlet()
+        if (jspFile == null || !jspFile.startsWith("/")) {
+            throw new IllegalArgumentException(
+                    sm.getString("applicationContext.addJspFile.iae", jspFile));
+        }
+
+        String jspServletClassName = null;
+        Map<String,String> jspFileInitParams = new HashMap<>();
+
+        Wrapper jspServlet = (Wrapper) context.findChild("jsp");
+
+        if (jspServlet == null) {
+            // No JSP servlet currently defined.
+            // Use default JSP Servlet class name
+            jspServletClassName = Constants.JSP_SERVLET_CLASS;
+        } else {
+            // JSP Servlet defined.
+            // Use same JSP Servlet class name
+            jspServletClassName = jspServlet.getServletClass();
+            // Use same init parameters
+            String[] params = jspServlet.findInitParameters();
+            for (String param : params) {
+                jspFileInitParams.put(param, jspServlet.findInitParameter(param));
+            }
+        }
+
+        // Add init parameter to specify JSP file
+        jspFileInitParams.put("jspFile", jspFile);
+
+        return addServlet(jspName, jspServletClassName, null, jspFileInitParams);
+    }
+
+
+    private ServletRegistration.Dynamic addServlet(String servletName, String servletClass,
+            Servlet servlet, Map<String,String> initParams) throws IllegalStateException {
 
         if (servletName == null || servletName.equals("")) {
             throw new IllegalArgumentException(sm.getString(
@@ -887,6 +925,12 @@ public class ApplicationContext implements ServletContext {
             wrapper.setServlet(servlet);
         }
 
+        if (initParams != null) {
+            for (Map.Entry<String, String> initParam: initParams.entrySet()) {
+                wrapper.addInitParameter(initParam.getKey(), initParam.getValue());
+            }
+        }
+
         return context.dynamicServletAdded(wrapper);
     }
 
@@ -903,7 +947,7 @@ public class ApplicationContext implements ServletContext {
             ExceptionUtils.handleThrowable(e.getCause());
             throw new ServletException(e);
         } catch (IllegalAccessException | NamingException | InstantiationException |
-                ClassNotFoundException e) {
+                ClassNotFoundException | NoSuchMethodException e) {
             throw new ServletException(e);
         }
     }
@@ -1044,7 +1088,7 @@ public class ApplicationContext implements ServletContext {
                     "applicationContext.addListener.iae.cnfe", className),
                     e);
         } catch (IllegalAccessException | NamingException | InstantiationException |
-                ClassNotFoundException e) {
+                ClassNotFoundException | NoSuchMethodException e) {
             throw new IllegalArgumentException(sm.getString(
                     "applicationContext.addListener.iae.cnfe", className),
                     e);
@@ -1116,7 +1160,8 @@ public class ApplicationContext implements ServletContext {
         } catch (InvocationTargetException e) {
             ExceptionUtils.handleThrowable(e.getCause());
             throw new ServletException(e);
-        } catch (IllegalAccessException | NamingException | InstantiationException e) {
+        } catch (IllegalAccessException | NamingException | InstantiationException |
+                NoSuchMethodException e) {
             throw new ServletException(e);
         }
     }
@@ -1224,6 +1269,60 @@ public class ApplicationContext implements ServletContext {
         Container host = context.getParent();
         Container engine = host.getParent();
         return engine.getName() + "/" + host.getName();
+    }
+
+
+    @Override
+    public int getSessionTimeout() {
+        return context.getSessionTimeout();
+    }
+
+
+    @Override
+    public void setSessionTimeout(int sessionTimeout) {
+        if (!context.getState().equals(LifecycleState.STARTING_PREP)) {
+            throw new IllegalStateException(
+                    sm.getString("applicationContext.setSessionTimeout.ise",
+                            getContextPath()));
+        }
+
+        context.setSessionTimeout(sessionTimeout);
+    }
+
+
+    @Override
+    public String getRequestCharacterEncoding() {
+        return context.getRequestCharacterEncoding();
+    }
+
+
+    @Override
+    public void setRequestCharacterEncoding(String encoding) {
+        if (!context.getState().equals(LifecycleState.STARTING_PREP)) {
+            throw new IllegalStateException(
+                    sm.getString("applicationContext.setRequestEncoding.ise",
+                            getContextPath()));
+        }
+
+        context.setRequestCharacterEncoding(encoding);
+    }
+
+
+    @Override
+    public String getResponseCharacterEncoding() {
+        return context.getResponseCharacterEncoding();
+    }
+
+
+    @Override
+    public void setResponseCharacterEncoding(String encoding) {
+        if (!context.getState().equals(LifecycleState.STARTING_PREP)) {
+            throw new IllegalStateException(
+                    sm.getString("applicationContext.setResponseEncoding.ise",
+                            getContextPath()));
+        }
+
+        context.setResponseCharacterEncoding(encoding);
     }
 
 

@@ -17,22 +17,24 @@
 package org.apache.coyote.http2;
 
 import java.io.IOException;
+import java.util.Iterator;
 
 import org.apache.coyote.AbstractProcessor;
 import org.apache.coyote.ActionCode;
 import org.apache.coyote.Adapter;
 import org.apache.coyote.ContainerThreadMarker;
 import org.apache.coyote.ErrorState;
-import org.apache.coyote.PushToken;
+import org.apache.coyote.Request;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.buf.ByteChunk;
 import org.apache.tomcat.util.net.AbstractEndpoint.Handler.SocketState;
+import org.apache.tomcat.util.net.DispatchType;
 import org.apache.tomcat.util.net.SocketEvent;
 import org.apache.tomcat.util.net.SocketWrapperBase;
 import org.apache.tomcat.util.res.StringManager;
 
-class StreamProcessor extends AbstractProcessor implements Runnable {
+class StreamProcessor extends AbstractProcessor {
 
     private static final Log log = LogFactory.getLog(StreamProcessor.class);
     private static final StringManager sm = StringManager.getManager(StreamProcessor.class);
@@ -41,7 +43,8 @@ class StreamProcessor extends AbstractProcessor implements Runnable {
     private final Stream stream;
 
 
-    StreamProcessor(Http2UpgradeHandler handler, Stream stream, Adapter adapter, SocketWrapperBase<?> socketWrapper) {
+    StreamProcessor(Http2UpgradeHandler handler, Stream stream, Adapter adapter,
+            SocketWrapperBase<?> socketWrapper) {
         super(stream.getCoyoteRequest(), stream.getCoyoteResponse());
         this.handler = handler;
         this.stream = stream;
@@ -50,8 +53,7 @@ class StreamProcessor extends AbstractProcessor implements Runnable {
     }
 
 
-    @Override
-    public final void run() {
+    final void process(SocketEvent event) {
         try {
             // FIXME: the regular processor syncs on socketWrapper, but here this deadlocks
             synchronized (this) {
@@ -60,7 +62,7 @@ class StreamProcessor extends AbstractProcessor implements Runnable {
                 ContainerThreadMarker.set();
                 SocketState state = SocketState.CLOSED;
                 try {
-                    state = process(socketWrapper, SocketEvent.OPEN_READ);
+                    state = process(socketWrapper, event);
 
                     if (state == SocketState.CLOSED) {
                         if (!getErrorState().isConnectionIoAllowed()) {
@@ -132,7 +134,11 @@ class StreamProcessor extends AbstractProcessor implements Runnable {
     @Override
     protected final void setRequestBody(ByteChunk body) {
         stream.getInputBuffer().insertReplayedBody(body);
-        stream.receivedEndOfStream();
+        try {
+            stream.receivedEndOfStream();
+        } catch (ConnectionException e) {
+            // Exception will not be thrown in this case
+        }
     }
 
 
@@ -147,6 +153,16 @@ class StreamProcessor extends AbstractProcessor implements Runnable {
         // NO-OP
         // HTTP/2 has to swallow any input received to ensure that the flow
         // control windows are correctly tracked.
+    }
+
+
+    @Override
+    protected void processSocketEvent(SocketEvent event, boolean dispatch) {
+        if (dispatch) {
+            handler.processStreamOnContainerThread(this, event);
+        } else {
+            this.process(event);
+        }
     }
 
 
@@ -169,8 +185,18 @@ class StreamProcessor extends AbstractProcessor implements Runnable {
 
 
     @Override
-    protected final void executeDispatches(SocketWrapperBase<?> wrapper) {
-        wrapper.getEndpoint().getExecutor().execute(this);
+    protected final void executeDispatches() {
+        Iterator<DispatchType> dispatches = getIteratorAndClearDispatches();
+        synchronized (this) {
+            /*
+             * TODO Check if this sync is necessary.
+             *      Compare with superrclass that uses SocketWrapper
+             */
+            while (dispatches != null && dispatches.hasNext()) {
+                DispatchType dispatchType = dispatches.next();
+                processSocketEvent(dispatchType.getSocketStatus(), false);
+            }
+        }
     }
 
 
@@ -181,9 +207,9 @@ class StreamProcessor extends AbstractProcessor implements Runnable {
 
 
     @Override
-    protected final void doPush(PushToken pushToken) {
+    protected final void doPush(Request pushTarget) {
         try {
-            pushToken.setResult(stream.push(pushToken.getPushTarget()));
+            stream.push(pushTarget);
         } catch (IOException ioe) {
             setErrorState(ErrorState.CLOSE_CONNECTION_NOW, ioe);
             response.setErrorException(ioe);

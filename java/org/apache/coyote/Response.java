@@ -18,6 +18,7 @@ package org.apache.coyote;
 
 import java.io.IOException;
 import java.io.StringReader;
+import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.Locale;
@@ -25,6 +26,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.servlet.WriteListener;
 
+import org.apache.juli.logging.Log;
+import org.apache.juli.logging.LogFactory;
+import org.apache.tomcat.util.buf.B2CConverter;
 import org.apache.tomcat.util.buf.MessageBytes;
 import org.apache.tomcat.util.http.MimeHeaders;
 import org.apache.tomcat.util.http.parser.MediaType;
@@ -43,6 +47,8 @@ import org.apache.tomcat.util.res.StringManager;
 public final class Response {
 
     private static final StringManager sm = StringManager.getManager(Response.class);
+
+    private static final Log log = LogFactory.getLog(Response.class);
 
     // ----------------------------------------------------- Class Variables
 
@@ -101,7 +107,7 @@ public final class Response {
      */
     String contentType = null;
     String contentLanguage = null;
-    String characterEncoding = Constants.DEFAULT_CHARACTER_ENCODING;
+    Charset charset = null;
     long contentLength = -1;
     private Locale locale = DEFAULT_LOCALE;
 
@@ -389,27 +395,30 @@ public final class Response {
         return contentLanguage;
     }
 
-    /*
-     * Overrides the name of the character encoding used in the body
-     * of the response. This method must be called prior to writing output
-     * using getWriter().
+
+    /**
+     * Overrides the character encoding used in the body of the response. This
+     * method must be called prior to writing output using getWriter().
      *
-     * @param charset String containing the name of the character encoding.
+     * @param charset The character encoding.
      */
-    public void setCharacterEncoding(String charset) {
-
-        if (isCommitted())
+    public void setCharset(Charset charset) {
+        if (isCommitted()) {
             return;
-        if (charset == null)
+        }
+        if (charset == null) {
             return;
+        }
 
-        characterEncoding = charset;
-        charsetSet=true;
+        this.charset = charset;
+        charsetSet = true;
     }
 
-    public String getCharacterEncoding() {
-        return characterEncoding;
+
+    public Charset getCharset() {
+        return charset;
     }
+
 
     /**
      * Sets the content type.
@@ -447,8 +456,12 @@ public final class Response {
         if (charsetValue != null) {
             charsetValue = charsetValue.trim();
             if (charsetValue.length() > 0) {
-                charsetSet = true;
-                this.characterEncoding = charsetValue;
+                try {
+                    charset = B2CConverter.getCharset(charsetValue);
+                    charsetSet = true;
+                } catch (UnsupportedEncodingException e) {
+                    log.warn(sm.getString("response.encoding.invalid", charsetValue), e);
+                }
             }
         }
     }
@@ -462,9 +475,9 @@ public final class Response {
         String ret = contentType;
 
         if (ret != null
-            && characterEncoding != null
+            && charset != null
             && charsetSet) {
-            ret = ret + ";charset=" + characterEncoding;
+            ret = ret + ";charset=" + charset.name();
         }
 
         return ret;
@@ -508,7 +521,7 @@ public final class Response {
         contentType = null;
         contentLanguage = null;
         locale = DEFAULT_LOCALE;
-        characterEncoding = Constants.DEFAULT_CHARACTER_ENCODING;
+        charset = null;
         charsetSet = false;
         contentLength = -1;
         status = 200;
@@ -614,7 +627,10 @@ public final class Response {
 
     public boolean isReady() {
         if (listener == null) {
-            throw new IllegalStateException(sm.getString("response.notNonBlocking"));
+            if (log.isDebugEnabled()) {
+                log.debug(sm.getString("response.notNonBlocking"));
+            }
+            return false;
         }
         // Assume write is not possible
         boolean ready = false;

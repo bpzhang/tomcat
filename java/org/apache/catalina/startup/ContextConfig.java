@@ -142,7 +142,7 @@ public class ContextConfig implements LifecycleListener {
         // Load our mapping properties for the standard authenticators
         Properties props = new Properties();
         try (InputStream is = ContextConfig.class.getClassLoader().getResourceAsStream(
-                "org/apache/catalina/startup/Authenticators.properties");) {
+                "org/apache/catalina/startup/Authenticators.properties")) {
             if (is != null) {
                 props.load(is);
             }
@@ -1299,6 +1299,7 @@ public class ContextConfig implements LifecycleListener {
                 webxml.getMimeMappings().entrySet()) {
             context.addMimeMapping(entry.getKey(), entry.getValue());
         }
+        context.setRequestCharacterEncoding(webxml.getRequestCharacterEncoding());
         // Name is just used for ordering
         for (ContextResourceEnvRef resource :
                 webxml.getResourceEnvRefs().values()) {
@@ -1307,6 +1308,7 @@ public class ContextConfig implements LifecycleListener {
         for (ContextResource resource : webxml.getResourceRefs().values()) {
             context.getNamingResources().addResource(resource);
         }
+        context.setResponseCharacterEncoding(webxml.getResponseCharacterEncoding());
         boolean allAuthenticatedUsersIsAppRole =
                 webxml.getSecurityRoles().contains(
                         SecurityConstraint.ROLE_ALL_AUTHENTICATED_USERS);
@@ -1431,7 +1433,7 @@ public class ContextConfig implements LifecycleListener {
             } else {
                 if(log.isDebugEnabled()) {
                     for (String urlPattern : jspPropertyGroup.getUrlPatterns()) {
-                        log.debug("Skiping " + urlPattern + " , no servlet " +
+                        log.debug("Skipping " + urlPattern + " , no servlet " +
                                 jspServletName);
                     }
                 }
@@ -2199,8 +2201,8 @@ public class ContextConfig implements LifecycleListener {
 
         populateJavaClassCache(javaClass.getSuperclassName(), javaClassCache);
 
-        for (String iterface : javaClass.getInterfaceNames()) {
-            populateJavaClassCache(iterface, javaClassCache);
+        for (String interfaceName : javaClass.getInterfaceNames()) {
+            populateJavaClassCache(interfaceName, javaClassCache);
         }
     }
 

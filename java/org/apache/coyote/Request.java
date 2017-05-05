@@ -17,12 +17,15 @@
 package org.apache.coyote;
 
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.servlet.ReadListener;
 
+import org.apache.tomcat.util.buf.B2CConverter;
 import org.apache.tomcat.util.buf.MessageBytes;
 import org.apache.tomcat.util.buf.UDecoder;
 import org.apache.tomcat.util.http.MimeHeaders;
@@ -96,6 +99,7 @@ public final class Request {
     private final MessageBytes localAddrMB = MessageBytes.newInstance();
 
     private final MimeHeaders headers = new MimeHeaders();
+    private final Map<String,String> trailerFields = new HashMap<>();
 
 
     /**
@@ -126,7 +130,7 @@ public final class Request {
      */
     private long contentLength = -1;
     private MessageBytes contentTypeMB = null;
-    private String charEncoding = null;
+    private Charset charset = null;
     /**
      * Is there an expectation ?
      */
@@ -193,12 +197,17 @@ public final class Request {
     }
 
 
+    public Map<String,String> getTrailerFields() {
+        return trailerFields;
+    }
+
+
     public UDecoder getURLDecoder() {
         return urlDecoder;
     }
 
-    // -------------------- Request data --------------------
 
+    // -------------------- Request data --------------------
 
     public MessageBytes scheme() {
         return schemeMB;
@@ -275,30 +284,29 @@ public final class Request {
         this.localPort = port;
     }
 
-    // -------------------- encoding/type --------------------
 
+    // -------------------- encoding/type --------------------
 
     /**
      * Get the character encoding used for this request.
      *
-     * @return The value set via {@link #setCharacterEncoding(String)} or if no
+     * @return The value set via {@link #setCharset(Charset)} or if no
      *         call has been made to that method try to obtain if from the
      *         content type.
      */
-    public String getCharacterEncoding() {
-
-        if (charEncoding != null) {
-            return charEncoding;
+    public Charset getCharset() {
+        if (charset != null) {
+            return charset;
         }
 
-        charEncoding = getCharsetFromContentType(getContentType());
-        return charEncoding;
+        charset = getCharsetFromContentType(getContentType());
 
+        return charset;
     }
 
 
-    public void setCharacterEncoding(String enc) {
-        this.charEncoding = enc;
+    public void setCharset(Charset charset) {
+        this.charset = charset;
     }
 
 
@@ -570,9 +578,10 @@ public final class Request {
 
         contentLength = -1;
         contentTypeMB = null;
-        charEncoding = null;
+        charset = null;
         expectation = false;
         headers.recycle();
+        trailerFields.clear();
         serverNameMB.recycle();
         serverPort=-1;
         localAddrMB.recycle();
@@ -631,14 +640,14 @@ public final class Request {
      *
      * @param contentType a content type header
      */
-    private static String getCharsetFromContentType(String contentType) {
+    private static Charset getCharsetFromContentType(String contentType) {
 
         if (contentType == null) {
-            return (null);
+            return null;
         }
         int start = contentType.indexOf("charset=");
         if (start < 0) {
-            return (null);
+            return null;
         }
         String encoding = contentType.substring(start + 8);
         int end = encoding.indexOf(';');
@@ -650,8 +659,16 @@ public final class Request {
             && (encoding.endsWith("\""))) {
             encoding = encoding.substring(1, encoding.length() - 1);
         }
-        return (encoding.trim());
 
+        Charset result = null;
+
+        try {
+            result = B2CConverter.getCharset(encoding.trim());
+        } catch (UnsupportedEncodingException e) {
+            // Ignore
+        }
+
+        return result;
     }
 
 }

@@ -67,6 +67,7 @@ import javax.websocket.WebSocketContainer;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.InstanceManager;
+import org.apache.tomcat.util.buf.StringUtils;
 import org.apache.tomcat.util.codec.binary.Base64;
 import org.apache.tomcat.util.collections.CaseInsensitiveKeyMap;
 import org.apache.tomcat.util.res.StringManager;
@@ -236,18 +237,20 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
             }
         }
 
+        // If the port is not explicitly specified, compute it based on the
+        // scheme
+        if (port == -1) {
+            if ("ws".equalsIgnoreCase(scheme)) {
+                port = 80;
+            } else {
+                // Must be wss due to scheme validation above
+                port = 443;
+            }
+        }
+
         // If sa is null, no proxy is configured so need to create sa
         if (sa == null) {
-            if (port == -1) {
-                if ("ws".equalsIgnoreCase(scheme)) {
-                    sa = new InetSocketAddress(host, 80);
-                } else {
-                    // Must be wss due to scheme validation above
-                    sa = new InetSocketAddress(host, 443);
-                }
-            } else {
-                sa = new InetSocketAddress(host, port);
-            }
+            sa = new InetSocketAddress(host, port);
         } else {
             proxyConnect = createProxyRequest(host, port);
         }
@@ -450,16 +453,14 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
         StringBuilder request = new StringBuilder();
         request.append("CONNECT ");
         request.append(host);
-        if (port != -1) {
-            request.append(':');
-            request.append(port);
-        }
+        request.append(':');
+        request.append(port);
+
         request.append(" HTTP/1.1\r\nProxy-Connection: keep-alive\r\nConnection: keepalive\r\nHost: ");
         request.append(host);
-        if (port != -1) {
-            request.append(':');
-            request.append(port);
-        }
+        request.append(':');
+        request.append(port);
+
         request.append("\r\n\r\n");
 
         byte[] bytes = request.toString().getBytes(StandardCharsets.ISO_8859_1);
@@ -628,21 +629,13 @@ public class WsWebSocketContainer implements WebSocketContainer, BackgroundProce
 
 
     private static void addHeader(ByteBuffer result, String key, List<String> values) {
-        StringBuilder sb = new StringBuilder();
-
-        Iterator<String> iter = values.iterator();
-        if (!iter.hasNext()) {
+        if (values.isEmpty()) {
             return;
-        }
-        sb.append(iter.next());
-        while (iter.hasNext()) {
-            sb.append(',');
-            sb.append(iter.next());
         }
 
         result.put(key.getBytes(StandardCharsets.ISO_8859_1));
         result.put(": ".getBytes(StandardCharsets.ISO_8859_1));
-        result.put(sb.toString().getBytes(StandardCharsets.ISO_8859_1));
+        result.put(StringUtils.join(values).getBytes(StandardCharsets.ISO_8859_1));
         result.put(crlf);
     }
 

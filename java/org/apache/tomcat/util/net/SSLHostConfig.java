@@ -86,6 +86,8 @@ public class SSLHostConfig implements Serializable {
     private String certificateRevocationListFile;
     private CertificateVerification certificateVerification = CertificateVerification.NONE;
     private int certificateVerificationDepth = 10;
+    // Used to track if certificateVerificationDepth has been explicitly set
+    private boolean certificateVerificationDepthConfigured = false;
     private String ciphers = "HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!kRSA";
     private LinkedHashSet<Cipher> cipherList = null;
     private List<String> jsseCipherNames = null;
@@ -93,6 +95,7 @@ public class SSLHostConfig implements Serializable {
     private Set<String> protocols = new HashSet<>();
     // JSSE
     private String keyManagerAlgorithm = KeyManagerFactory.getDefaultAlgorithm();
+    private boolean revocationEnabled = false;
     private int sessionCacheSize = 0;
     private int sessionTimeout = 86400;
     private String sslProtocol = Constants.SSL_PROTO_TLS;
@@ -127,6 +130,10 @@ public class SSLHostConfig implements Serializable {
     }
 
 
+    // Expose in String form for JMX
+    public String getConfigType() {
+        return configType.name();
+    }
     public void setConfigType(Type configType) {
         this.configType = configType;
         if (configType == Type.EITHER) {
@@ -249,6 +256,10 @@ public class SSLHostConfig implements Serializable {
     // TODO: This certificate setter can be removed once it is no longer
     // necessary to support the old configuration attributes (Tomcat 10?).
 
+    public String getCertificateKeyPassword() {
+        registerDefaultCertificate();
+        return defaultCertificate.getCertificateKeyPassword();
+    }
     public void setCertificateKeyPassword(String certificateKeyPassword) {
         registerDefaultCertificate();
         defaultCertificate.setCertificateKeyPassword(certificateKeyPassword);
@@ -277,11 +288,17 @@ public class SSLHostConfig implements Serializable {
 
     public void setCertificateVerificationDepth(int certificateVerificationDepth) {
         this.certificateVerificationDepth = certificateVerificationDepth;
+        certificateVerificationDepthConfigured = true;
     }
 
 
     public int getCertificateVerificationDepth() {
         return certificateVerificationDepth;
+    }
+
+
+    public boolean isCertificateVerificationDepthConfigured() {
+        return certificateVerificationDepthConfigured;
     }
 
 
@@ -434,30 +451,50 @@ public class SSLHostConfig implements Serializable {
     // TODO: These certificate setters can be removed once it is no longer
     // necessary to support the old configuration attributes (Tomcat 10?).
 
+    public String getCertificateKeyAlias() {
+        registerDefaultCertificate();
+        return defaultCertificate.getCertificateKeyAlias();
+    }
     public void setCertificateKeyAlias(String certificateKeyAlias) {
         registerDefaultCertificate();
         defaultCertificate.setCertificateKeyAlias(certificateKeyAlias);
     }
 
 
+    public String getCertificateKeystoreFile() {
+        registerDefaultCertificate();
+        return defaultCertificate.getCertificateKeystoreFile();
+    }
     public void setCertificateKeystoreFile(String certificateKeystoreFile) {
         registerDefaultCertificate();
         defaultCertificate.setCertificateKeystoreFile(certificateKeystoreFile);
     }
 
 
+    public String getCertificateKeystorePassword() {
+        registerDefaultCertificate();
+        return defaultCertificate.getCertificateKeystorePassword();
+    }
     public void setCertificateKeystorePassword(String certificateKeystorePassword) {
         registerDefaultCertificate();
         defaultCertificate.setCertificateKeystorePassword(certificateKeystorePassword);
     }
 
 
+    public String getCertificateKeystoreProvider() {
+        registerDefaultCertificate();
+        return defaultCertificate.getCertificateKeystoreProvider();
+    }
     public void setCertificateKeystoreProvider(String certificateKeystoreProvider) {
         registerDefaultCertificate();
         defaultCertificate.setCertificateKeystoreProvider(certificateKeystoreProvider);
     }
 
 
+    public String getCertificateKeystoreType() {
+        registerDefaultCertificate();
+        return defaultCertificate.getCertificateKeystoreType();
+    }
     public void setCertificateKeystoreType(String certificateKeystoreType) {
         registerDefaultCertificate();
         defaultCertificate.setCertificateKeystoreType(certificateKeystoreType);
@@ -472,6 +509,17 @@ public class SSLHostConfig implements Serializable {
 
     public String getKeyManagerAlgorithm() {
         return keyManagerAlgorithm;
+    }
+
+
+    public void setRevocationEnabled(boolean revocationEnabled) {
+        setProperty("revocationEnabled", Type.JSSE);
+        this.revocationEnabled = revocationEnabled;
+    }
+
+
+    public boolean getRevocationEnabled() {
+        return revocationEnabled;
     }
 
 
@@ -560,11 +608,11 @@ public class SSLHostConfig implements Serializable {
 
     public String getTruststoreProvider() {
         if (truststoreProvider == null) {
-            if (defaultCertificate == null) {
-                return SSLHostConfigCertificate.DEFAULT_KEYSTORE_PROVIDER;
-            } else {
-                return defaultCertificate.getCertificateKeystoreProvider();
+            Set<SSLHostConfigCertificate> certificates = getCertificates();
+            if (certificates.size() == 1) {
+                return certificates.iterator().next().getCertificateKeystoreProvider();
             }
+            return SSLHostConfigCertificate.DEFAULT_KEYSTORE_PROVIDER;
         } else {
             return truststoreProvider;
         }
@@ -579,11 +627,16 @@ public class SSLHostConfig implements Serializable {
 
     public String getTruststoreType() {
         if (truststoreType == null) {
-            if (defaultCertificate == null) {
-                return SSLHostConfigCertificate.DEFAULT_KEYSTORE_TYPE;
-            } else {
-                return defaultCertificate.getCertificateKeystoreType();
+            Set<SSLHostConfigCertificate> certificates = getCertificates();
+            if (certificates.size() == 1) {
+                String keystoreType = certificates.iterator().next().getCertificateKeystoreType();
+                // Don't use keystore type as the default if we know it is not
+                // going to be used as a trust store type
+                if (!"PKCS12".equalsIgnoreCase(keystoreType)) {
+                    return keystoreType;
+                }
             }
+            return SSLHostConfigCertificate.DEFAULT_KEYSTORE_TYPE;
         } else {
             return truststoreType;
         }
@@ -627,18 +680,30 @@ public class SSLHostConfig implements Serializable {
     // TODO: These certificate setters can be removed once it is no longer
     // necessary to support the old configuration attributes (Tomcat 10?).
 
+    public String getCertificateChainFile() {
+        registerDefaultCertificate();
+        return defaultCertificate.getCertificateChainFile();
+    }
     public void setCertificateChainFile(String certificateChainFile) {
         registerDefaultCertificate();
         defaultCertificate.setCertificateChainFile(certificateChainFile);
     }
 
 
+    public String getCertificateFile() {
+        registerDefaultCertificate();
+        return defaultCertificate.getCertificateFile();
+    }
     public void setCertificateFile(String certificateFile) {
         registerDefaultCertificate();
         defaultCertificate.setCertificateFile(certificateFile);
     }
 
 
+    public String getCertificateKeyFile() {
+        registerDefaultCertificate();
+        return defaultCertificate.getCertificateKeyFile();
+    }
     public void setCertificateKeyFile(String certificateKeyFile) {
         registerDefaultCertificate();
         defaultCertificate.setCertificateKeyFile(certificateKeyFile);

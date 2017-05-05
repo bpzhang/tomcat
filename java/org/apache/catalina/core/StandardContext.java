@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.ArrayList;
@@ -114,6 +115,7 @@ import org.apache.tomcat.InstanceManagerBindings;
 import org.apache.tomcat.JarScanner;
 import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.IntrospectionUtils;
+import org.apache.tomcat.util.buf.StringUtils;
 import org.apache.tomcat.util.descriptor.XmlIdentifiers;
 import org.apache.tomcat.util.descriptor.web.ApplicationParameter;
 import org.apache.tomcat.util.descriptor.web.ErrorPage;
@@ -807,8 +809,35 @@ public class StandardContext extends ContainerBase
 
     private boolean dispatchersUseEncodedPaths = true;
 
+    private String requestEncoding = null;
+
+    private String responseEncoding = null;
 
     // ----------------------------------------------------- Context Properties
+
+    @Override
+    public String getRequestCharacterEncoding() {
+        return requestEncoding;
+    }
+
+
+    @Override
+    public void setRequestCharacterEncoding(String requestEncoding) {
+        this.requestEncoding = requestEncoding;
+    }
+
+
+    @Override
+    public String getResponseCharacterEncoding() {
+        return responseEncoding;
+    }
+
+
+    @Override
+    public void setResponseCharacterEncoding(String responseEncoding) {
+        this.responseEncoding = responseEncoding;
+    }
+
 
     @Override
     public void setDispatchersUseEncodedPaths(boolean dispatchersUseEncodedPaths) {
@@ -1002,17 +1031,7 @@ public class StandardContext extends ContainerBase
 
     @Override
     public String getResourceOnlyServlets() {
-        StringBuilder result = new StringBuilder();
-        boolean first = true;
-        for (String servletName : resourceOnlyServlets) {
-            if (first) {
-                first = false;
-            } else {
-                result.append(',');
-            }
-            result.append(servletName);
-        }
-        return result.toString();
+        return StringUtils.join(resourceOnlyServlets);
     }
 
 
@@ -1333,7 +1352,7 @@ public class StandardContext extends ContainerBase
         if (this.charsetMapper == null) {
             try {
                 Class<?> clazz = Class.forName(charsetMapperClass);
-                this.charsetMapper = (CharsetMapper) clazz.newInstance();
+                this.charsetMapper = (CharsetMapper) clazz.getConstructor().newInstance();
             } catch (Throwable t) {
                 ExceptionUtils.handleThrowable(t);
                 this.charsetMapper = new CharsetMapper();
@@ -2048,7 +2067,7 @@ public class StandardContext extends ContainerBase
             log.warn(sm.getString(
                     "standardContext.pathInvalid", path, this.path));
         }
-        encodedPath = URLEncoder.DEFAULT.encode(this.path, "UTF-8");
+        encodedPath = URLEncoder.DEFAULT.encode(this.path, StandardCharsets.UTF_8);
         if (getName() == null) {
             setName(this.path);
         }
@@ -3246,11 +3265,11 @@ public class StandardContext extends ContainerBase
         Wrapper wrapper = null;
         if (wrapperClass != null) {
             try {
-                wrapper = (Wrapper) wrapperClass.newInstance();
+                wrapper = (Wrapper) wrapperClass.getConstructor().newInstance();
             } catch (Throwable t) {
                 ExceptionUtils.handleThrowable(t);
                 log.error("createWrapper", t);
-                return (null);
+                return null;
             }
         } else {
             wrapper = new StandardWrapper();
@@ -3261,12 +3280,12 @@ public class StandardContext extends ContainerBase
                 try {
                     Class<?> clazz = Class.forName(wrapperLifecycles[i]);
                     LifecycleListener listener =
-                        (LifecycleListener) clazz.newInstance();
+                        (LifecycleListener) clazz.getConstructor().newInstance();
                     wrapper.addLifecycleListener(listener);
                 } catch (Throwable t) {
                     ExceptionUtils.handleThrowable(t);
                     log.error("createWrapper", t);
-                    return (null);
+                    return null;
                 }
             }
         }
@@ -3276,18 +3295,17 @@ public class StandardContext extends ContainerBase
                 try {
                     Class<?> clazz = Class.forName(wrapperListeners[i]);
                     ContainerListener listener =
-                      (ContainerListener) clazz.newInstance();
+                            (ContainerListener) clazz.getConstructor().newInstance();
                     wrapper.addContainerListener(listener);
                 } catch (Throwable t) {
                     ExceptionUtils.handleThrowable(t);
                     log.error("createWrapper", t);
-                    return (null);
+                    return null;
                 }
             }
         }
 
-        return (wrapper);
-
+        return wrapper;
     }
 
 
@@ -4992,7 +5010,7 @@ public class StandardContext extends ContainerBase
         }
 
         if (!dependencyCheck) {
-            // do not make application available if depency check fails
+            // do not make application available if dependency check fails
             ok = false;
         }
 
@@ -5183,7 +5201,7 @@ public class StandardContext extends ContainerBase
             }
 
             // Check constraints for uncovered HTTP methods
-            // Needs to be after SCIs and listeners as they may programatically
+            // Needs to be after SCIs and listeners as they may programmatically
             // change constraints
             if (ok) {
                 checkConstraintsForUncoveredMethods(findConstraints());
@@ -5408,7 +5426,7 @@ public class StandardContext extends ContainerBase
                 log.debug("Processing standard container shutdown");
 
             // JNDI resources are unbound in CONFIGURE_STOP_EVENT so stop
-            // naming resources before they are unbound since NamingResoucres
+            // naming resources before they are unbound since NamingResources
             // does a JNDI lookup to retrieve the resource. This needs to be
             // after the application has finished with the resource
             if (namingResources != null) {
@@ -5465,7 +5483,7 @@ public class StandardContext extends ContainerBase
         try {
             resetContext();
         } catch( Exception ex ) {
-            log.error( "Error reseting context " + this + " " + ex, ex );
+            log.error( "Error resetting context " + this + " " + ex, ex );
         }
 
         //reset the instance manager
@@ -5555,6 +5573,16 @@ public class StandardContext extends ContainerBase
             } catch (Exception e) {
                 log.warn(sm.getString(
                         "standardContext.backgroundProcess.resources",
+                        resources), e);
+            }
+        }
+        InstanceManager instanceManager = getInstanceManager();
+        if (instanceManager != null) {
+            try {
+                instanceManager.backgroundProcess();
+            } catch (Exception e) {
+                log.warn(sm.getString(
+                        "standardContext.backgroundProcess.instanceManager",
                         resources), e);
             }
         }
@@ -5685,10 +5713,10 @@ public class StandardContext extends ContainerBase
                 }
             }
 
-            // Note: For progammatically added Servlets this may not be the
+            // Note: For programmatically added Servlets this may not be the
             //       complete set of security constraints since additional
             //       URL patterns can be added after the application has called
-            //       setSecurity. For all programmatically added servilets, the
+            //       setSecurity. For all programmatically added servlets, the
             //       #dynamicServletAdded() method sets a flag that ensures that
             //       the constraints are re-evaluated before the servlet is
             //       first used
@@ -6203,7 +6231,7 @@ public class StandardContext extends ContainerBase
     }
 
 
-    /* Remove a JMX notficationListener
+    /* Remove a JMX notificationListener
      * @see javax.management.NotificationEmitter#removeNotificationListener(javax.management.NotificationListener, javax.management.NotificationFilter, java.lang.Object)
      */
     @Override
@@ -6557,6 +6585,12 @@ public class StandardContext extends ContainerBase
         }
 
         @Override
+        public Dynamic addJspFile(String jspName, String jspFile) {
+            throw new UnsupportedOperationException(
+                    sm.getString("noPluggabilityServletContext.notAllowed"));
+        }
+
+        @Override
         public <T extends Servlet> T createServlet(Class<T> c)
                 throws ServletException {
             throw new UnsupportedOperationException(
@@ -6686,6 +6720,42 @@ public class StandardContext extends ContainerBase
         @Override
         public String getVirtualServerName() {
             return sc.getVirtualServerName();
+        }
+
+        @Override
+        public int getSessionTimeout() {
+            throw new UnsupportedOperationException(
+                    sm.getString("noPluggabilityServletContext.notAllowed"));
+        }
+
+        @Override
+        public void setSessionTimeout(int sessionTimeout) {
+            throw new UnsupportedOperationException(
+                    sm.getString("noPluggabilityServletContext.notAllowed"));
+        }
+
+        @Override
+        public String getRequestCharacterEncoding() {
+            throw new UnsupportedOperationException(
+                    sm.getString("noPluggabilityServletContext.notAllowed"));
+        }
+
+        @Override
+        public void setRequestCharacterEncoding(String encoding) {
+            throw new UnsupportedOperationException(
+                    sm.getString("noPluggabilityServletContext.notAllowed"));
+        }
+
+        @Override
+        public String getResponseCharacterEncoding() {
+            throw new UnsupportedOperationException(
+                    sm.getString("noPluggabilityServletContext.notAllowed"));
+        }
+
+        @Override
+        public void setResponseCharacterEncoding(String encoding) {
+            throw new UnsupportedOperationException(
+                    sm.getString("noPluggabilityServletContext.notAllowed"));
         }
     }
 }

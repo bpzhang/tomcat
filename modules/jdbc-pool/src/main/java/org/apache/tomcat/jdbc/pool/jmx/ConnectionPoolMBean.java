@@ -45,6 +45,10 @@ public interface ConnectionPoolMBean extends PoolConfiguration  {
 
     public long getReconnectedCount();
 
+    public long getRemoveAbandonedCount();
+
+    public long getReleasedIdleCount();
+
     //=================================================================
     //       POOL OPERATIONS
     //=================================================================
@@ -69,6 +73,11 @@ public interface ConnectionPoolMBean extends PoolConfiguration  {
      * To purge idle connections see {@link #purge()}
      */
     public void purgeOnReturn();
+
+    /**
+     * reset the statistics of this pool.
+     */
+    public void resetStats();
 
     //=================================================================
     //       POOL NOTIFICATIONS

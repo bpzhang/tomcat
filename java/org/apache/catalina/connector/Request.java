@@ -24,6 +24,7 @@ import java.io.StringReader;
 import java.io.UnsupportedEncodingException;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -63,9 +64,9 @@ import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import javax.servlet.http.HttpUpgradeHandler;
-import javax.servlet.http.Mapping;
 import javax.servlet.http.Part;
 import javax.servlet.http.PushBuilder;
+import javax.servlet.http.ServletMapping;
 
 import org.apache.catalina.Container;
 import org.apache.catalina.Context;
@@ -76,6 +77,7 @@ import org.apache.catalina.Realm;
 import org.apache.catalina.Session;
 import org.apache.catalina.TomcatPrincipal;
 import org.apache.catalina.Wrapper;
+import org.apache.catalina.core.ApplicationFilterChain;
 import org.apache.catalina.core.ApplicationMapping;
 import org.apache.catalina.core.ApplicationPart;
 import org.apache.catalina.core.ApplicationPushBuilder;
@@ -95,6 +97,7 @@ import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.buf.B2CConverter;
 import org.apache.tomcat.util.buf.ByteChunk;
 import org.apache.tomcat.util.buf.MessageBytes;
+import org.apache.tomcat.util.buf.StringUtils;
 import org.apache.tomcat.util.buf.UDecoder;
 import org.apache.tomcat.util.http.CookieProcessor;
 import org.apache.tomcat.util.http.FastHttpDateFormat;
@@ -125,10 +128,17 @@ public class Request implements HttpServletRequest {
 
     private static final Log log = LogFactory.getLog(Request.class);
 
-    // ----------------------------------------------------------- Constructors
+    /**
+     * Create a new Request object associated with the given Connector.
+     *
+     * @param connector The Connector with which this Request object will always
+     *                  be associated. In normal usage this must be non-null. In
+     *                  some test scenarios, it may be possible to use a null
+     *                  Connector without triggering an NPE.
+     */
+    public Request(Connector connector) {
+        this.connector = connector;
 
-
-    public Request() {
         formats = new SimpleDateFormat[formatsTemplate.length];
         for(int i = 0; i < formats.length; i++) {
             formats[i] = (SimpleDateFormat) formatsTemplate[i].clone();
@@ -545,22 +555,13 @@ public class Request implements HttpServletRequest {
     /**
      * Associated Catalina connector.
      */
-    protected Connector connector;
+    protected final Connector connector;
 
     /**
      * @return the Connector through which this Request was received.
      */
     public Connector getConnector() {
         return this.connector;
-    }
-
-    /**
-     * Set the Connector through which this Request was received.
-     *
-     * @param connector The new connector
-     */
-    public void setConnector(Connector connector) {
-        this.connector = connector;
     }
 
 
@@ -575,18 +576,6 @@ public class Request implements HttpServletRequest {
      */
     public Context getContext() {
         return mappingData.context;
-    }
-
-    /**
-     * @param context The newly associated Context
-     * @deprecated Use setters on {@link #getMappingData() MappingData} object.
-     * Depending on use case, you may need to update other
-     * <code>MappingData</code> fields as well, such as
-     * <code>contextSlashCount</code> and <code>host</code>.
-     */
-    @Deprecated
-    public void setContext(Context context) {
-        mappingData.context = context;
     }
 
 
@@ -738,21 +727,8 @@ public class Request implements HttpServletRequest {
         return mappingData.wrapper;
     }
 
-    /**
-     * @param wrapper The newly associated Wrapper
-     * @deprecated Use setters on {@link #getMappingData() MappingData} object.
-     * Depending on use case, you may need to update other
-     * <code>MappingData</code> fields as well, such as <code>context</code>
-     * and <code>contextSlashCount</code>.
-     */
-    @Deprecated
-    public void setWrapper(Wrapper wrapper) {
-        mappingData.wrapper = wrapper;
-    }
-
 
     // ------------------------------------------------- Request Public Methods
-
 
     /**
      * Create and return a ServletInputStream to read the content
@@ -982,7 +958,7 @@ public class Request implements HttpServletRequest {
         if (isSecure() && !sslAttributesParsed) {
             getAttribute(Globals.CERTIFICATES_ATTR);
         }
-        // Take a copy to prevent ConncurrentModificationExceptions if used to
+        // Take a copy to prevent ConcurrentModificationExceptions if used to
         // remove attributes
         Set<String> names = new HashSet<>();
         names.addAll(attributes.keySet());
@@ -995,7 +971,39 @@ public class Request implements HttpServletRequest {
      */
     @Override
     public String getCharacterEncoding() {
-      return coyoteRequest.getCharacterEncoding();
+        Charset charset = coyoteRequest.getCharset();
+        if (charset != null) {
+            return charset.name();
+        }
+
+        Context context = getContext();
+        if (context != null) {
+            return context.getRequestCharacterEncoding();
+        }
+
+        return null;
+    }
+
+
+    private Charset getCharset() {
+        Charset charset = coyoteRequest.getCharset();
+        if (charset != null) {
+            return charset;
+        }
+
+        Context context = getContext();
+        if (context != null) {
+            String encoding = context.getRequestCharacterEncoding();
+            if (encoding != null) {
+                try {
+                    return B2CConverter.getCharset(encoding);
+                } catch (UnsupportedEncodingException e) {
+                    // Ignore
+                }
+            }
+        }
+
+        return org.apache.coyote.Constants.DEFAULT_BODY_CHARSET;
     }
 
 
@@ -1377,9 +1385,9 @@ public class Request implements HttpServletRequest {
         if (context.getDispatchersUseEncodedPaths()) {
             if (pos >= 0) {
                 relative = URLEncoder.DEFAULT.encode(
-                        requestPath.substring(0, pos + 1), "UTF-8") + path;
+                        requestPath.substring(0, pos + 1), StandardCharsets.UTF_8) + path;
             } else {
-                relative = URLEncoder.DEFAULT.encode(requestPath, "UTF-8") + path;
+                relative = URLEncoder.DEFAULT.encode(requestPath, StandardCharsets.UTF_8) + path;
             }
         } else {
             if (pos >= 0) {
@@ -1608,18 +1616,17 @@ public class Request implements HttpServletRequest {
      * @since Servlet 2.3
      */
     @Override
-    public void setCharacterEncoding(String enc)
-        throws UnsupportedEncodingException {
+    public void setCharacterEncoding(String enc) throws UnsupportedEncodingException {
 
         if (usingReader) {
             return;
         }
 
         // Confirm that the encoding name is valid
-        B2CConverter.getCharset(enc);
+        Charset charset = B2CConverter.getCharset(enc);
 
         // Save the validated encoding
-        coyoteRequest.setCharacterEncoding(enc);
+        coyoteRequest.setCharset(charset);
     }
 
 
@@ -1637,7 +1644,11 @@ public class Request implements HttpServletRequest {
     public AsyncContext startAsync(ServletRequest request,
             ServletResponse response) {
         if (!isAsyncSupported()) {
-            throw new IllegalStateException(sm.getString("request.asyncNotSupported"));
+            IllegalStateException ise =
+                    new IllegalStateException(sm.getString("request.asyncNotSupported"));
+            log.warn(sm.getString("coyoteRequest.noAsync",
+                    StringUtils.join(getNonAsyncClassNames())), ise);
+            throw ise;
         }
 
         if (asyncContext == null) {
@@ -1649,6 +1660,31 @@ public class Request implements HttpServletRequest {
         asyncContext.setTimeout(getConnector().getAsyncTimeout());
 
         return asyncContext;
+    }
+
+
+    private Set<String> getNonAsyncClassNames() {
+        Set<String> result = new HashSet<>();
+
+        Wrapper wrapper = getWrapper();
+        if (!wrapper.isAsyncSupported()) {
+            result.add(wrapper.getServletClass());
+        }
+
+        FilterChain filterChain = getFilterChain();
+        if (filterChain instanceof ApplicationFilterChain) {
+            ((ApplicationFilterChain) filterChain).findNonAsyncFilters(result);
+        } else {
+            result.add(sm.getString("coyoteRequest.filterAsyncSupportUnknown"));
+        }
+
+        Container c = wrapper;
+        while (c != null) {
+            c.getPipeline().findNonAsyncValves(result);
+            c = c.getParent();
+        }
+
+        return result;
     }
 
     @Override
@@ -1885,51 +1921,64 @@ public class Request implements HttpServletRequest {
      *
      * @param principal The user Principal
      */
-    public void setUserPrincipal(Principal principal) {
-
-        if (Globals.IS_SECURITY_ENABLED){
-            HttpSession session = getSession(false);
-            if ( (subject != null) &&
-                 (!subject.getPrincipals().contains(principal)) ){
+    public void setUserPrincipal(final Principal principal) {
+        if (Globals.IS_SECURITY_ENABLED) {
+            if (subject == null) {
+                final HttpSession session = getSession(false);
+                if (session == null) {
+                    // Cache the subject in the request
+                    subject = newSubject(principal);
+                } else {
+                    // Cache the subject in the request and the session
+                    subject = (Subject) session.getAttribute(Globals.SUBJECT_ATTR);
+                    if (subject == null) {
+                        subject = newSubject(principal);
+                        session.setAttribute(Globals.SUBJECT_ATTR, subject);
+                    } else {
+                        subject.getPrincipals().add(principal);
+                    }
+                }
+            } else {
                 subject.getPrincipals().add(principal);
-            } else if (session != null &&
-                        session.getAttribute(Globals.SUBJECT_ATTR) == null) {
-                subject = new Subject();
-                subject.getPrincipals().add(principal);
-            }
-            if (session != null){
-                session.setAttribute(Globals.SUBJECT_ATTR, subject);
             }
         }
+        userPrincipal = principal;
+    }
 
-        this.userPrincipal = principal;
+
+    private Subject newSubject(final Principal principal) {
+        final Subject result = new Subject();
+        result.getPrincipals().add(principal);
+        return result;
     }
 
 
     // --------------------------------------------- HttpServletRequest Methods
 
+    @Override
+    public Map<String, String> getTrailerFields() {
+        Map<String,String> result = new HashMap<>();
+        result.putAll(coyoteRequest.getTrailerFields());
+        return result;
+    }
+
+
     /**
      * {@inheritDoc}
      *
      * @since Servlet 4.0
      */
     @Override
-    public boolean isPushSupported() {
+    public PushBuilder newPushBuilder() {
         AtomicBoolean result = new AtomicBoolean();
         coyoteRequest.action(ActionCode.IS_PUSH_SUPPORTED, result);
-        return result.get();
+        if (result.get()) {
+            return new ApplicationPushBuilder(this);
+        } else {
+            return null;
+        }
     }
 
-
-    /**
-     * {@inheritDoc}
-     *
-     * @since Servlet 4.0
-     */
-    @Override
-    public PushBuilder getPushBuilder() {
-        return new ApplicationPushBuilder(this);
-    }
 
     /**
      * {@inheritDoc}
@@ -1943,14 +1992,17 @@ public class Request implements HttpServletRequest {
         T handler;
         InstanceManager instanceManager = null;
         try {
-            // Do not go through the instance manager for internal Tomcat classes since they don't need injection
+            // Do not go through the instance manager for internal Tomcat classes since they don't
+            // need injection
             if (InternalHttpUpgradeHandler.class.isAssignableFrom(httpUpgradeHandlerClass)) {
-                handler = httpUpgradeHandlerClass.newInstance();
+                handler = httpUpgradeHandlerClass.getConstructor().newInstance();
             } else {
                 instanceManager = getContext().getInstanceManager();
                 handler = (T) instanceManager.newInstance(httpUpgradeHandlerClass);
             }
-        } catch (InstantiationException | IllegalAccessException | InvocationTargetException | NamingException e) {
+        } catch (InstantiationException | IllegalAccessException | InvocationTargetException |
+                NamingException | IllegalArgumentException | NoSuchMethodException |
+                SecurityException e) {
             throw new ServletException(e);
         }
         UpgradeToken upgradeToken = new UpgradeToken(handler,
@@ -2008,7 +2060,7 @@ public class Request implements HttpServletRequest {
             candidate = uri.substring(0, pos);
         }
         candidate = removePathParameters(candidate);
-        candidate = UDecoder.URLDecode(candidate, connector.getURIEncoding());
+        candidate = UDecoder.URLDecode(candidate, connector.getURICharset());
         candidate = org.apache.tomcat.util.http.RequestUtil.normalize(candidate);
         boolean match = canonicalContextPath.equals(candidate);
         while (!match && pos != -1) {
@@ -2019,7 +2071,7 @@ public class Request implements HttpServletRequest {
                 candidate = uri.substring(0, pos);
             }
             candidate = removePathParameters(candidate);
-            candidate = UDecoder.URLDecode(candidate, connector.getURIEncoding());
+            candidate = UDecoder.URLDecode(candidate, connector.getURICharset());
             candidate = org.apache.tomcat.util.http.RequestUtil.normalize(candidate);
             match = canonicalContextPath.equals(candidate);
         }
@@ -2194,8 +2246,8 @@ public class Request implements HttpServletRequest {
 
 
     @Override
-    public Mapping getMapping() {
-        return applicationMapping.getMapping();
+    public ServletMapping getServletMapping() {
+        return applicationMapping.getServletMapping();
     }
 
 
@@ -2766,15 +2818,7 @@ public class Request implements HttpServletRequest {
                         upload.parseRequest(new ServletRequestContext(this));
                 int maxPostSize = getConnector().getMaxPostSize();
                 int postSize = 0;
-                String enc = getCharacterEncoding();
-                Charset charset = null;
-                if (enc != null) {
-                    try {
-                        charset = B2CConverter.getCharset(enc);
-                    } catch (UnsupportedEncodingException e) {
-                        // Ignore
-                    }
-                }
+                Charset charset = getCharset();
                 for (FileItem item : items) {
                     ApplicationPart part = new ApplicationPart(item, location);
                     parts.add(part);
@@ -2782,31 +2826,14 @@ public class Request implements HttpServletRequest {
                         String name = part.getName();
                         String value = null;
                         try {
-                            String encoding = parameters.getEncoding();
-                            if (encoding == null) {
-                                if (enc == null) {
-                                    encoding = Parameters.DEFAULT_ENCODING;
-                                } else {
-                                    encoding = enc;
-                                }
-                            }
-                            value = part.getString(encoding);
+                            value = part.getString(charset.name());
                         } catch (UnsupportedEncodingException uee) {
-                            try {
-                                value = part.getString(Parameters.DEFAULT_ENCODING);
-                            } catch (UnsupportedEncodingException e) {
-                                // Should not be possible
-                            }
+                            // Not possible
                         }
                         if (maxPostSize >= 0) {
                             // Have to calculate equivalent size. Not completely
                             // accurate but close enough.
-                            if (charset == null) {
-                                // Name length
-                                postSize += name.getBytes().length;
-                            } else {
-                                postSize += name.getBytes(charset).length;
-                            }
+                            postSize += name.getBytes(charset).length;
                             if (value != null) {
                                 // Equals sign
                                 postSize++;
@@ -3097,22 +3124,15 @@ public class Request implements HttpServletRequest {
 
             // getCharacterEncoding() may have been overridden to search for
             // hidden form field containing request encoding
-            String enc = getCharacterEncoding();
+            Charset charset = getCharset();
 
             boolean useBodyEncodingForURI = connector.getUseBodyEncodingForURI();
-            if (enc != null) {
-                parameters.setEncoding(enc);
-                if (useBodyEncodingForURI) {
-                    parameters.setQueryStringEncoding(enc);
-                }
-            } else {
-                parameters.setEncoding
-                    (org.apache.coyote.Constants.DEFAULT_CHARACTER_ENCODING);
-                if (useBodyEncodingForURI) {
-                    parameters.setQueryStringEncoding
-                        (org.apache.coyote.Constants.DEFAULT_CHARACTER_ENCODING);
-                }
+            parameters.setCharset(charset);
+            if (useBodyEncodingForURI) {
+                parameters.setQueryStringCharset(charset);
             }
+            // Note: If !useBodyEncodingForURI, the query string encoding is
+            //       that set towards the start of CoyoyeAdapter.service()
 
             parameters.handleQueryParameters();
 

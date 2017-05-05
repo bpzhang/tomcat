@@ -20,6 +20,7 @@ package org.apache.catalina.core;
 
 
 import java.util.ArrayList;
+import java.util.Set;
 
 import javax.management.ObjectName;
 
@@ -32,6 +33,7 @@ import org.apache.catalina.LifecycleState;
 import org.apache.catalina.Pipeline;
 import org.apache.catalina.Valve;
 import org.apache.catalina.util.LifecycleBase;
+import org.apache.catalina.util.ToStringUtil;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.ExceptionUtils;
@@ -50,8 +52,7 @@ import org.apache.tomcat.util.ExceptionUtils;
  * @author Craig R. McClanahan
  */
 
-public class StandardPipeline extends LifecycleBase
-        implements Pipeline, Contained {
+public class StandardPipeline extends LifecycleBase implements Pipeline {
 
     private static final Log log = LogFactory.getLog(StandardPipeline.class);
 
@@ -117,8 +118,19 @@ public class StandardPipeline extends LifecycleBase
     }
 
 
-    // ------------------------------------------------------ Contained Methods
+    @Override
+    public void findNonAsyncValves(Set<String> result) {
+        Valve valve = (first!=null) ? first : basic;
+        while (valve != null) {
+            if (!valve.isAsyncSupported()) {
+                result.add(valve.getClass().getName());
+            }
+            valve = valve.getNext();
+        }
+    }
 
+
+    // ------------------------------------------------------ Contained Methods
 
     /**
      * Return the Container with which this Pipeline is associated.
@@ -214,10 +226,7 @@ public class StandardPipeline extends LifecycleBase
      */
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder("Pipeline[");
-        sb.append(container);
-        sb.append(']');
-        return sb.toString();
+        return ToStringUtil.toString(this);
     }
 
 

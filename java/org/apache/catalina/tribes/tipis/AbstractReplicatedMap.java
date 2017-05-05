@@ -166,7 +166,7 @@ public abstract class AbstractReplicatedMap<K,V>
      * Creates a new map.
      * @param owner The map owner
      * @param channel The channel to use for communication
-     * @param timeout long - timeout for RPC messags
+     * @param timeout long - timeout for RPC messages
      * @param mapContextName String - unique name for this map, to allow multiple maps per channel
      * @param initialCapacity int - the size of this map, see HashMap
      * @param loadFactor float - load factor, see HashMap
@@ -619,9 +619,16 @@ public abstract class AbstractReplicatedMap<K,V>
             mapmsg.deserialize(getExternalLoaders());
             if (mapmsg.getMsgType() == MapMessage.MSG_START) {
                 mapMemberAdded(mapmsg.getPrimary());
-            } else if (mapmsg.getMsgType() == MapMessage.MSG_INIT
-                    || mapmsg.getMsgType() == MapMessage.MSG_PING) {
+            } else if (mapmsg.getMsgType() == MapMessage.MSG_INIT) {
                 memberAlive(mapmsg.getPrimary());
+            } else if (mapmsg.getMsgType() == MapMessage.MSG_PING) {
+                Member member = mapmsg.getPrimary();
+                if (log.isInfoEnabled())
+                    log.info(sm.getString("abstractReplicatedMap.leftOver.pingMsg", member));
+                State state = (State) mapmsg.getValue();
+                if (state.isAvailable()) {
+                    memberAlive(member);
+                }
             } else {
                 // other messages are ignored.
                 if (log.isInfoEnabled())
